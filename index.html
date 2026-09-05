@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Panel de Operaciones · Warehouse Rentals</title>
 <style>
+/* ══════════════════════════════════════════════════════════
+   WAREHOUSE RENTALS — THEME.CSS (heredado del Panel de Operaciones)
+   ══════════════════════════════════════════════════════════ */
 @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@300;400;500;600&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -173,6 +176,7 @@ tr.fila-alerta td{background:rgba(155,38,38,.025)}
 @keyframes spin{to{transform:rotate(360deg)}}
 .loading-txt{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--suave)}
 .db-banner{background:var(--verde-xs);border-bottom:1px solid var(--verde-sm);color:var(--verde);font-size:9.5px;letter-spacing:.06em;text-align:center;padding:6px 12px}
+/* Planeación semanal — tablero por día */
 .week-nav{display:flex;align-items:center;gap:12px;margin-bottom:14px}
 .week-board{display:flex;gap:12px;overflow-x:auto;padding-bottom:10px}
 .week-col{flex:1 1 0;min-width:190px;background:#fff;border:1px solid var(--linea);border-radius:var(--r);display:flex;flex-direction:column;max-height:76vh}
@@ -189,6 +193,7 @@ tr.fila-alerta td{background:rgba(155,38,38,.025)}
 .week-card .wk-nom{font-size:11px;font-weight:500;margin-bottom:3px;line-height:1.3}
 .week-card .wk-meta{font-size:9px;color:var(--suave)}
 .week-empty{text-align:center;padding:20px 8px;font-size:10px;color:var(--suave);font-style:italic}
+/* Calendario */
 .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
 .cal-dow{font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:var(--suave);text-align:center;padding:4px 0}
 .cal-cell{min-height:74px;border:1px solid var(--linea);border-radius:3px;padding:5px 6px;font-size:10px;color:var(--suave);cursor:pointer;transition:.15s}
@@ -197,6 +202,7 @@ tr.fila-alerta td{background:rgba(155,38,38,.025)}
 .cal-cell.hoy{border-color:var(--dorado);background:var(--dorado-xs)}
 .cal-num{font-family:'EB Garamond',serif;font-size:13px;color:var(--texto);margin-bottom:3px}
 .cal-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin:1px 2px 0 0}
+/* Flota y personal */
 .flota-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
 @media(max-width:760px){.flota-grid{grid-template-columns:1fr}}
 .cap-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
@@ -207,6 +213,7 @@ tr.fila-alerta td{background:rgba(155,38,38,.025)}
 .cap-seg.usado{background:var(--cafe)}
 .cap-seg.libre{background:var(--verde-xs)}
 .cap-num{font-size:9.5px;color:var(--suave);min-width:64px;text-align:right}
+/* Alertas (reutiliza patrón de incidencias) */
 .inc-list{display:flex;flex-direction:column;gap:10px}
 .inc-card{display:flex;gap:14px;align-items:flex-start;background:#fff;border:1px solid var(--linea);border-left:4px solid var(--rojo);border-radius:3px;padding:14px 16px}
 .inc-card.tipo-personal{border-left-color:var(--dorado)}
