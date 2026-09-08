@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Panel de Operaciones · Warehouse Rentals</title>
+<link rel="icon" type="image/x-icon" href="favicon.ico">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 <style>
 /* ══════════════════════════════════════════════════════════
    WAREHOUSE RENTALS — THEME.CSS (heredado del Panel de Operaciones)
@@ -81,13 +85,14 @@ a{color:inherit}
 .filtro-btn{font-size:12px;padding:6px 14px;border-radius:20px;border:1px solid var(--linea);background:#fff;color:var(--suave);cursor:pointer;transition:.15s;font-family:'Inter',sans-serif}
 .filtro-btn:hover{border-color:var(--dorado);color:var(--cafe)}
 .filtro-btn.active{background:var(--cafe);color:var(--crema);border-color:var(--cafe)}
-.tabla-scroll{overflow-x:auto}
-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.tabla-scroll{overflow:auto;max-height:540px}
+.tabla-scroll thead th{position:sticky;top:0;z-index:5;background:var(--crema-dark);box-shadow:0 1px 0 var(--linea)}
+table{width:100%;border-collapse:collapse;table-layout:auto}
 thead tr{background:var(--crema-dark)}
-th{font-size:11.5px;color:var(--suave);padding:11px 14px;text-align:left;font-weight:500;border-bottom:1px solid var(--linea);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+th{font-size:11.5px;color:var(--suave);padding:11px 14px;text-align:left;font-weight:500;border-bottom:1px solid var(--linea);white-space:nowrap}
 th.r{text-align:right}
-td{font-size:13px;padding:12px 14px;border-bottom:1px solid var(--linea);color:var(--texto);vertical-align:middle;overflow:hidden;text-overflow:ellipsis}
-td.r{text-align:right;font-variant-numeric:tabular-nums}
+td{font-size:13px;padding:12px 14px;border-bottom:1px solid var(--linea);color:var(--texto);vertical-align:middle;word-break:break-word}
+td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 td.mono{font-family:'EB Garamond',serif;font-size:14px}
 tr:last-child td{border-bottom:none}
 tr.fila-data:hover td{background:var(--cafe-xs);cursor:pointer}
@@ -279,7 +284,7 @@ footer.pie{max-width:1280px;margin:10px auto 0;padding:20px 32px 24px;border-top
 table.gantt-table{table-layout:auto}
 table.gantt-table th, table.gantt-table td{padding:8px 6px;text-align:center;font-size:11px}
 table.gantt-table th.gantt-veh, table.gantt-table td.gantt-veh{text-align:left;position:sticky;left:0;background:#fff;z-index:2;min-width:150px;border-right:1px solid var(--linea)}
-table.gantt-table thead th.gantt-veh{background:var(--crema-dark);z-index:3}
+table.gantt-table thead th.gantt-veh{background:var(--crema-dark);z-index:6}
 table.gantt-table th{color:var(--suave);font-weight:500;background:var(--crema-dark);white-space:nowrap}
 table.gantt-table th.hoy{color:var(--dorado);font-weight:700}
 .gantt-cell{width:34px;height:30px;border-radius:5px;cursor:default;transition:.1s}
@@ -334,7 +339,7 @@ table.gantt-table th.hoy{color:var(--dorado);font-weight:700}
       <button class="nav-tab" data-tab="produccion"><span class="side-ico">🛠️</span>Producción</button>
       <button class="nav-tab" data-tab="reportes"><span class="side-ico">📊</span>Reportes</button>
     </nav>
-    <div class="sidebar-foot">Grupo Idirin · bodega-wh's</div>
+    <div class="sidebar-foot">Grupo Idirin</div>
   </aside>
 
   <div class="main-col">
