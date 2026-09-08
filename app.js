@@ -85,11 +85,17 @@ function renderHeader(){
 }
 
 /* ───────── navegación de tabs ───────── */
+const TAB_TITLES = {
+  ordenes:'Órdenes', semana:'Planeación semanal', calendario:'Calendario', flota:'Flota y personal',
+  alertas:'Alertas', proyeccion:'Proyección', personal:'Personal', unidades:'Unidades', venues:'Venues',
+  inventario:'Inventario', compras:'Compras', produccion:'Producción', reportes:'Reportes'
+};
 document.getElementById('navTabs').addEventListener('click', e=>{
   const btn = e.target.closest('.nav-tab'); if(!btn) return;
   document.querySelectorAll('.nav-tab').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   state.tab = btn.dataset.tab;
+  document.getElementById('topbarTitle').textContent = TAB_TITLES[state.tab] || '';
   document.querySelectorAll('.tab-panel').forEach(p=>p.style.display='none');
   document.getElementById('panel-'+state.tab).style.display='';
   renderCurrentTab();
@@ -434,26 +440,31 @@ function renderCalendarioTab(){
   const dows = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
   document.getElementById('calMesLabel').textContent = first.toLocaleDateString('es-MX',{month:'long',year:'numeric'});
   const hoyIso = isoLocal(today());
+  const MAX_PILLS = 3;
   let html = dows.map(d=>`<div class="cal-dow">${d}</div>`).join('');
   for(let i=0;i<42;i++){
     const d = addDays(gridStart,i);
     const iso = isoLocal(d);
     const fuera = d.getMonth()!==state.calMonth;
-    const ordenesDia = DB.ordenes.filter(o=>ordenTouchesDay(o,iso));
-    const estados = [...new Set(ordenesDia.map(o=>o.estado))];
-    const colores = {Confirmada:'var(--verde)',Pendiente:'var(--dorado)',Cancelada:'var(--rojo)',Finalizada:'var(--suave)'};
-    html += `<div class="cal-cell ${fuera?'fuera':''} ${iso===hoyIso?'hoy':''}" onclick="verDiaCalendario('${iso}')">
-      <div class="cal-num">${d.getDate()}</div>
-      ${estados.map(e=>`<span class="cal-dot" style="background:${colores[e]||'var(--suave)'}"></span>`).join('')}
-      ${ordenesDia.length?`<div style="font-size:9px;margin-top:2px">${ordenesDia.length} orden${ordenesDia.length>1?'es':''}</div>`:''}
+    const ordenesDia = DB.ordenes.filter(o=>ordenTouchesDay(o,iso)).sort((a,b)=>(a.hora_inicio||'').localeCompare(b.hora_inicio||''));
+    const visibles = ordenesDia.slice(0,MAX_PILLS);
+    const resto = ordenesDia.length - visibles.length;
+    html += `<div class="cal-cell ${fuera?'fuera':''} ${iso===hoyIso?'hoy':''} ${iso===state.calSelDay?'sel':''}" onclick="verDiaCalendario('${iso}')">
+      <div class="cal-daynum">${d.getDate()}</div>
+      <div class="cal-events">
+        ${visibles.map(o=>`<div class="cal-pill est-${slug(o.estado)}" title="${escapeHtml(o.cliente+' — '+o.nombre_evento)}">${escapeHtml(o.nombre_evento)}</div>`).join('')}
+        ${resto>0?`<div class="cal-more">+${resto} más</div>`:''}
+      </div>
     </div>`;
   }
   document.getElementById('calGrid').innerHTML = html;
   if(!document.getElementById('calDayDetail')){
-    document.getElementById('calGrid').insertAdjacentHTML('afterend', `<div id="calDayDetail" style="margin-top:14px"></div>`);
+    document.getElementById('calGrid').insertAdjacentHTML('afterend', `<div id="calDayDetail" style="margin-top:16px"></div>`);
   }
 }
 window.verDiaCalendario = function(iso){
+  state.calSelDay = iso;
+  renderCalendarioTab();
   const ordenesDia = DB.ordenes.filter(o=>ordenTouchesDay(o,iso));
   const el = document.getElementById('calDayDetail');
   el.innerHTML = `<div class="form-section-label">Órdenes del ${fmtDate(iso)}</div>` + (ordenesDia.length ? ordenesDia.map(o=>`
