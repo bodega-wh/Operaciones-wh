@@ -13,6 +13,7 @@ const state = {
   ordenFiltro: 'todos', ordenBusqueda: '',
   semanaOffset: 0,
   calYear: null, calMonth: null, calSelDay: null,
+  flotaCalOffset: 0, historialBusqueda: '',
   personalBusqueda: '', venueBusqueda: '', articuloBusqueda: ''
 };
 
@@ -35,6 +36,50 @@ function badge(txt){ return `<span class="badge badge-${slug(txt)}">${escapeHtml
 /* ───────── loading / toast ───────── */
 function showLoading(on){ document.getElementById('loadingOverlay').classList.toggle('open', on); }
 function toast(msg, isErr){ const t=document.getElementById('toast'); t.textContent=msg; t.className='toast'+(isErr?' err':''); requestAnimationFrame(()=>t.classList.add('show')); setTimeout(()=>t.classList.remove('show'),2800); }
+
+/* ───────── tooltip flotante (calendario + gantt de unidades) ───────── */
+const hoverTooltipEl = document.getElementById('hoverTooltip');
+function showTooltip(target, html){
+  hoverTooltipEl.innerHTML = html;
+  const rect = target.getBoundingClientRect();
+  const ttRect = hoverTooltipEl.getBoundingClientRect();
+  let left = rect.left + rect.width/2 - ttRect.width/2;
+  left = Math.max(8, Math.min(left, window.innerWidth - ttRect.width - 8));
+  let top = rect.top - ttRect.height - 10;
+  if(top < 8) top = rect.bottom + 10;
+  hoverTooltipEl.style.left = left+'px';
+  hoverTooltipEl.style.top = top+'px';
+  hoverTooltipEl.classList.add('show');
+}
+function hideTooltip(){ hoverTooltipEl.classList.remove('show'); }
+function ordenTooltipHTML(o){
+  const hora = o.hora_inicio ? o.hora_inicio.slice(0,5)+(o.hora_fin?'–'+o.hora_fin.slice(0,5):'') : 'Sin hora definida';
+  const asignado = o.orden_personal?.length||0, requerido = o.personal_requerido||0;
+  const vehiculos = (o.orden_unidades||[]).map(u=>u.unidad?.tipo).filter(Boolean);
+  return `
+    <div class="ht-title">${escapeHtml(o.cliente)} — ${escapeHtml(o.nombre_evento)}</div>
+    <div class="ht-row">🕒 ${hora}</div>
+    <div class="ht-row">📍 ${escapeHtml(o.venue?.nombre||'Sin venue')} · ${o.pax||0} pax</div>
+    <div class="ht-row">👥 ${asignado}/${requerido} personal</div>
+    <div class="ht-row">🚚 ${vehiculos.length?escapeHtml(vehiculos.join(', ')):'Sin unidad asignada'}</div>
+  `;
+}
+document.getElementById('calGrid').addEventListener('mouseover', e=>{
+  const pill = e.target.closest('.cal-pill'); if(!pill) return;
+  const o = DB.ordenes.find(x=>x.id===pill.dataset.ordenId); if(!o) return;
+  showTooltip(pill, ordenTooltipHTML(o));
+});
+document.getElementById('calGrid').addEventListener('mouseout', e=>{
+  if(e.target.closest('.cal-pill')) hideTooltip();
+});
+document.getElementById('ganttBody').addEventListener('mouseover', e=>{
+  const cell = e.target.closest('.gantt-cell.ocupada'); if(!cell) return;
+  const o = DB.ordenes.find(x=>x.id===cell.dataset.ordenId); if(!o) return;
+  showTooltip(cell, ordenTooltipHTML(o));
+});
+document.getElementById('ganttBody').addEventListener('mouseout', e=>{
+  if(e.target.closest('.gantt-cell.ocupada')) hideTooltip();
+});
 
 /* ───────── carga de datos ───────── */
 async function loadAll(){
@@ -414,12 +459,19 @@ function renderSemanaTab(){
   document.getElementById('weekBoard').innerHTML = dias.map(d=>{
     const iso = isoLocal(d);
     const ordenesDia = DB.ordenes.filter(o=>ordenTouchesDay(o,iso)).sort((a,b)=>(a.hora_inicio||'').localeCompare(b.hora_inicio||''));
-    const cards = ordenesDia.map(o=>`
+    const cards = ordenesDia.map(o=>{
+      const asignado = o.orden_personal?.length||0, requerido = o.personal_requerido||0;
+      const vehiculos = (o.orden_unidades||[]).map(u=>u.unidad?.identificador ? `${u.unidad.tipo} · ${u.unidad.identificador}` : u.unidad?.tipo).filter(Boolean);
+      return `
       <div class="week-card st-${slug(o.estado)}" onclick="abrirDetalleOrden('${o.id}')">
+        ${o.hora_inicio?`<div class="wk-time">🕒 ${o.hora_inicio.slice(0,5)}</div>`:''}
         <div class="wk-nom">${escapeHtml(o.nombre_evento)}</div>
         <div class="wk-meta">${escapeHtml(o.venue?.nombre||'Sin venue')} · ${o.pax||0} pax</div>
-        <div class="wk-meta">👥 ${o.orden_personal?.length||0}/${o.personal_requerido||0} · 🚚 ${o.orden_unidades?.length||0}</div>
-      </div>`).join('') || `<div class="week-empty">Sin órdenes</div>`;
+        <div class="wk-tags">${vehiculos.length?vehiculos.map(v=>`<span class="wk-vtag">🚚 ${escapeHtml(v)}</span>`).join(''):'<span class="wk-vtag">Sin unidad asignada</span>'}</div>
+        <div class="wk-staff ${asignado<requerido?'falta':''}">👥 ${asignado}/${requerido} personal</div>
+        <div class="wk-edit-hint">Clic para editar horario y staff →</div>
+      </div>`;
+    }).join('') || `<div class="week-empty">Sin órdenes</div>`;
     return `<div class="week-col ${iso===hoyIso?'hoy':''}">
       <div class="week-col-head"><div class="wc-dia">${d.toLocaleDateString('es-MX',{weekday:'long'})}</div><div class="wc-fecha">${d.getDate()}</div></div>
       <div class="week-col-body">${cards}</div>
@@ -452,7 +504,7 @@ function renderCalendarioTab(){
     html += `<div class="cal-cell ${fuera?'fuera':''} ${iso===hoyIso?'hoy':''} ${iso===state.calSelDay?'sel':''}" onclick="verDiaCalendario('${iso}')">
       <div class="cal-daynum">${d.getDate()}</div>
       <div class="cal-events">
-        ${visibles.map(o=>`<div class="cal-pill est-${slug(o.estado)}" title="${escapeHtml(o.cliente+' — '+o.nombre_evento)}">${escapeHtml(o.nombre_evento)}</div>`).join('')}
+        ${visibles.map(o=>`<div class="cal-pill est-${slug(o.estado)}" data-orden-id="${o.id}">${escapeHtml(o.nombre_evento)}</div>`).join('')}
         ${resto>0?`<div class="cal-more">+${resto} más</div>`:''}
       </div>
     </div>`;
@@ -522,7 +574,66 @@ function renderFlotaTab(){
       <td>${badge(o.estado)}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="5"><div class="empty-state"><p>Sin órdenes en los próximos 14 días.</p></div></td></tr>`;
+
+  renderGanttUnidades();
+  renderHistorial();
 }
+
+/* ── Gantt de disponibilidad de unidades ── */
+function renderGanttUnidades(){
+  const DAYS = 14;
+  const base = addDays(today(), state.flotaCalOffset);
+  const dias = Array.from({length:DAYS},(_,i)=>addDays(base,i));
+  document.getElementById('flotaCalLabel').textContent = `${dias[0].toLocaleDateString('es-MX',{day:'2-digit',month:'short'})} – ${dias[DAYS-1].toLocaleDateString('es-MX',{day:'2-digit',month:'short'})}`;
+  const hoyIso = isoLocal(today());
+  document.getElementById('ganttHead').innerHTML = `<th class="gantt-veh">Unidad</th>` + dias.map(d=>{
+    const iso = isoLocal(d);
+    return `<th class="${iso===hoyIso?'hoy':''}">${d.toLocaleDateString('es-MX',{weekday:'short'})}<br>${d.getDate()}</th>`;
+  }).join('');
+  document.getElementById('ganttBody').innerHTML = DB.unidades.map(u=>{
+    const fueraServicio = u.estado!=='Operativa';
+    const cells = dias.map(d=>{
+      const iso = isoLocal(d);
+      if(fueraServicio) return `<td><div class="gantt-cell fuera-servicio"></div></td>`;
+      const orden = DB.ordenes.find(o=>o.estado!=='Cancelada' && (o.orden_unidades||[]).some(x=>x.unidad.id===u.id) && ordenTouchesDay(o,iso));
+      if(orden){
+        const color = {Confirmada:'var(--verde)',Pendiente:'var(--dorado)',Finalizada:'var(--suave)'}[orden.estado] || 'var(--cafe)';
+        return `<td><div class="gantt-cell ocupada" style="background:${color}" data-orden-id="${orden.id}" onclick="abrirDetalleOrden('${orden.id}')"></div></td>`;
+      }
+      return `<td><div class="gantt-cell libre"></div></td>`;
+    }).join('');
+    return `<tr>
+      <td class="gantt-veh"><div class="gantt-veh-name">${escapeHtml(u.tipo)}${fueraServicio?`<span class="badge-fuera-servicio">${escapeHtml(u.estado)}</span>`:''}</div><div class="gantt-veh-sub">${escapeHtml(u.identificador||'')}</div></td>
+      ${cells}
+    </tr>`;
+  }).join('') || `<tr><td colspan="${DAYS+1}"><div class="empty-state"><p>Sin unidades registradas.</p></div></td></tr>`;
+}
+document.getElementById('flotaCalAnt').addEventListener('click', ()=>{ state.flotaCalOffset-=7; renderGanttUnidades(); });
+document.getElementById('flotaCalSig').addEventListener('click', ()=>{ state.flotaCalOffset+=7; renderGanttUnidades(); });
+document.getElementById('flotaCalHoy').addEventListener('click', ()=>{ state.flotaCalOffset=0; renderGanttUnidades(); });
+
+/* ── Historial de asignaciones ── */
+function historialFiltrado(){
+  const q = state.historialBusqueda.toLowerCase();
+  return [...DB.ordenes].filter(o=>{
+    if(!q) return true;
+    const personalNames = (o.orden_personal||[]).map(p=>p.personal.nombre).join(' ');
+    const unidadNames = (o.orden_unidades||[]).map(u=>`${u.unidad.tipo} ${u.unidad.identificador||''}`).join(' ');
+    const hay = [o.cliente,o.nombre_evento,personalNames,unidadNames].join(' ').toLowerCase();
+    return hay.includes(q);
+  }).sort((a,b)=> b.fecha_inicio.localeCompare(a.fecha_inicio));
+}
+function renderHistorial(){
+  document.getElementById('tbHistorial').innerHTML = historialFiltrado().map(o=>`
+    <tr class="fila-data" onclick="abrirDetalleOrden('${o.id}')">
+      <td>${fmtRango(o.fecha_inicio,o.fecha_fin)}</td>
+      <td>${escapeHtml(o.cliente)} — ${escapeHtml(o.nombre_evento)}</td>
+      <td>${(o.orden_personal||[]).map(p=>`<span class="unidad-tag">${escapeHtml(p.personal.nombre)}</span>`).join('')||'—'}</td>
+      <td>${(o.orden_unidades||[]).map(u=>`<span class="unidad-tag">${escapeHtml(u.unidad.tipo)}${u.unidad.identificador?' · '+escapeHtml(u.unidad.identificador):''}</span>`).join('')||'—'}</td>
+      <td>${badge(o.estado)}</td>
+    </tr>`).join('') || `<tr><td colspan="5"><div class="empty-state"><p>Sin historial disponible.</p></div></td></tr>`;
+}
+document.getElementById('buscarHistorial').addEventListener('input', e=>{ state.historialBusqueda=e.target.value; renderHistorial(); });
 
 /* ══════════════════════════ ALERTAS ══════════════════════════ */
 function computeAlerts(){

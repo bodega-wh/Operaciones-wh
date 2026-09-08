@@ -260,6 +260,37 @@ footer.pie{max-width:1280px;margin:10px auto 0;padding:20px 32px 24px;border-top
 .dg-val{font-size:13px;color:var(--texto)}
 .seccion-titulo{font-family:'EB Garamond',serif;font-size:15px;color:var(--cafe);margin:14px 0 6px;font-style:italic}
 
+/* Tooltip flotante (calendario) — posicionado por JS, escapa cualquier overflow */
+.hover-tooltip{position:fixed;z-index:500;background:var(--cafe-deep);color:var(--crema);border-radius:8px;padding:10px 13px;font-size:12px;max-width:230px;box-shadow:var(--sh-lg);pointer-events:none;opacity:0;transform:translateY(4px);transition:opacity .12s,transform .12s}
+.hover-tooltip.show{opacity:1;transform:translateY(0)}
+.ht-title{font-weight:600;margin-bottom:5px;color:#fff;font-size:12.5px}
+.ht-row{display:flex;align-items:center;gap:6px;color:rgba(247,244,238,.75);margin-top:3px;font-size:11.5px}
+
+/* Planeación semanal — tarjeta enriquecida */
+.wk-time{font-size:10.5px;font-weight:600;color:var(--dorado-deep,#8a6a18);background:var(--dorado-xs);display:inline-block;padding:1px 7px;border-radius:20px;margin-bottom:5px}
+.wk-tags{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0 2px}
+.wk-vtag{font-size:10px;color:var(--cafe);background:var(--crema-dark);border-radius:4px;padding:2px 7px}
+.wk-staff{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--suave);margin-top:5px}
+.wk-staff.falta{color:var(--rojo);font-weight:500}
+.wk-edit-hint{font-size:9.5px;color:var(--suave);opacity:0;transition:opacity .15s;margin-top:6px;font-style:italic}
+.week-card:hover .wk-edit-hint{opacity:1}
+
+/* Gantt de disponibilidad de unidades */
+table.gantt-table{table-layout:auto}
+table.gantt-table th, table.gantt-table td{padding:8px 6px;text-align:center;font-size:11px}
+table.gantt-table th.gantt-veh, table.gantt-table td.gantt-veh{text-align:left;position:sticky;left:0;background:#fff;z-index:2;min-width:150px;border-right:1px solid var(--linea)}
+table.gantt-table thead th.gantt-veh{background:var(--crema-dark);z-index:3}
+table.gantt-table th{color:var(--suave);font-weight:500;background:var(--crema-dark);white-space:nowrap}
+table.gantt-table th.hoy{color:var(--dorado);font-weight:700}
+.gantt-cell{width:34px;height:30px;border-radius:5px;cursor:default;transition:.1s}
+.gantt-cell.libre{background:var(--crema-dark)}
+.gantt-cell.ocupada{cursor:pointer}
+.gantt-cell.ocupada:hover{filter:brightness(1.08)}
+.gantt-cell.fuera-servicio{background:repeating-linear-gradient(45deg,var(--linea),var(--linea) 3px,#fff 3px,#fff 6px)}
+.gantt-veh-name{font-size:12.5px;color:var(--texto);font-weight:500}
+.gantt-veh-sub{font-size:10px;color:var(--suave)}
+.badge-fuera-servicio{background:rgba(138,115,98,.12);color:var(--suave);border:1px solid rgba(138,115,98,.28);font-size:9.5px;padding:1px 7px;border-radius:20px;margin-left:6px}
+
 /* ── responsive: sidebar colapsa a barra superior ── */
 @media(max-width:880px){
   .shell{flex-direction:column}
@@ -284,7 +315,7 @@ footer.pie{max-width:1280px;margin:10px auto 0;padding:20px 32px 24px;border-top
       <div class="brand-sub">Warehouse Rentals</div>
       <div class="brand-title">Panel de <em>Operaciones</em></div>
     </div>
-    <div class="db-pill-side"><span class="dot"></span>Conectado a Supabase</div>
+    <!-- sin indicador de conexión visible -->
     <nav class="side-nav" id="navTabs">
       <div class="side-group-label">Operación</div>
       <button class="nav-tab active" data-tab="ordenes"><span class="side-ico">📋</span>Órdenes</button>
@@ -393,12 +424,52 @@ footer.pie{max-width:1280px;margin:10px auto 0;padding:20px 32px 24px;border-top
       <div class="chart-card"><div class="chart-head">Personal por rol</div><div id="capPersonal"></div></div>
       <div class="chart-card"><div class="chart-head">Unidades por tipo</div><div id="capUnidades"></div></div>
     </div>
+
     <div class="tabla-wrap">
-      <div class="tabla-topbar"><div class="tabla-title">Asignaciones — próximos 14 días</div></div>
+      <div class="tabla-topbar">
+        <div class="tabla-title">Disponibilidad de unidades</div>
+        <div class="tabla-actions">
+          <button class="btn-icon" id="flotaCalAnt">‹</button>
+          <div class="fecha-hdr" id="flotaCalLabel" style="min-width:150px;text-align:center">—</div>
+          <button class="btn-icon" id="flotaCalSig">›</button>
+          <button class="btn-export" id="flotaCalHoy">Hoy</button>
+        </div>
+      </div>
+      <div class="tabla-scroll">
+        <table class="gantt-table">
+          <thead><tr id="ganttHead"></tr></thead>
+          <tbody id="ganttBody"></tbody>
+        </table>
+      </div>
+      <div class="cal-leyenda" style="padding:12px 20px">
+        <span class="cal-leyenda-item"><span class="cal-leyenda-sw" style="background:var(--verde)"></span>Confirmada</span>
+        <span class="cal-leyenda-item"><span class="cal-leyenda-sw" style="background:var(--dorado)"></span>Pendiente</span>
+        <span class="cal-leyenda-item"><span class="cal-leyenda-sw" style="background:var(--crema-dark);border:1px solid var(--linea)"></span>Libre</span>
+        <span class="cal-leyenda-item"><span class="cal-leyenda-sw" style="background:repeating-linear-gradient(45deg,var(--linea),var(--linea) 3px,#fff 3px,#fff 6px)"></span>Fuera de servicio</span>
+      </div>
+    </div>
+
+    <div class="tabla-wrap">
+      <div class="tabla-topbar"><div class="tabla-title">Próximas asignaciones</div></div>
       <div class="tabla-scroll">
         <table>
           <thead><tr><th style="width:130px">Fecha</th><th>Orden</th><th>Personal asignado</th><th>Unidades asignadas</th><th style="width:90px">Estado</th></tr></thead>
           <tbody id="tbFlota"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tabla-wrap">
+      <div class="tabla-topbar">
+        <div class="tabla-title">Historial de asignaciones</div>
+        <div class="tabla-actions">
+          <input type="search" class="tabla-buscar" id="buscarHistorial" placeholder="Buscar orden, vehículo o persona…">
+        </div>
+      </div>
+      <div class="tabla-scroll">
+        <table>
+          <thead><tr><th style="width:130px">Fecha</th><th>Orden</th><th>Personal asignado</th><th>Unidades asignadas</th><th style="width:90px">Estado</th></tr></thead>
+          <tbody id="tbHistorial"></tbody>
         </table>
       </div>
     </div>
@@ -557,7 +628,7 @@ footer.pie{max-width:1280px;margin:10px auto 0;padding:20px 32px 24px;border-top
   </div>
     </main>
 
-    <footer class="pie"><p class="pie-txt">Warehouse Rentals · Panel de operaciones · Conectado a Supabase (bodega-wh's)</p></footer>
+    <footer class="pie"><p class="pie-txt">Warehouse Rentals · Panel de operaciones</p></footer>
   </div>
 </div>
 
@@ -612,6 +683,7 @@ footer.pie{max-width:1280px;margin:10px auto 0;padding:20px 32px 24px;border-top
 
 <div class="loading-overlay" id="loadingOverlay"><div class="spinner"></div><div class="loading-txt">Cargando…</div></div>
 <div class="toast" id="toast"></div>
+<div class="hover-tooltip" id="hoverTooltip"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="app.js"></script>
