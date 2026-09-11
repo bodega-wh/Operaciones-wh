@@ -7,7 +7,7 @@ const SUPABASE_URL = 'https://ivpespsvzmutzoxbinjs.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml2cGVzcHN2em11dHpveGJpbmpzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgyMTU1NDgsImV4cCI6MjEwMzc5MTU0OH0.pZmgAFFsLlkzZ4TjWkekNtdEeUOZP_pe1jANGPCiUr8';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const DB = { ordenes: [], personal: [], unidades: [], venues: [], articulos: [], compras: [], produccion: [], config: {} };
+const DB = { ordenes: [], personal: [], unidades: [], venues: [], articulos: [], compras: [], produccion: [], incidencias: [], config: {} };
 const state = {
   tab: 'ordenes',
   ordenFiltro: 'todos', ordenBusqueda: '',
@@ -85,13 +85,13 @@ document.getElementById('ganttBody').addEventListener('mouseout', e=>{
 async function loadAll(){
   showLoading(true);
   try{
-    const [ordenesRes, personalRes, unidadesRes, venuesRes, articulosRes, comprasRes, produccionRes, configRes] = await Promise.all([
+    const [ordenesRes, personalRes, unidadesRes, venuesRes, articulosRes, comprasRes, produccionRes, incidenciasRes, configRes] = await Promise.all([
       sb.from('ordenes').select(`*,
         venue:venues(id,nombre,direccion,capacidad,telefono,contacto),
         encargado:personal!ordenes_encargado_personal_id_fkey(id,nombre,rol),
         orden_personal(personal:personal(id,nombre,rol,categoria_rol,disponibilidad)),
         orden_unidades(unidad:unidades(id,tipo,identificador,estado)),
-        orden_articulos(cantidad,seccion,dimensiones,nota,articulo:articulos(id,nombre,categoria,stock_total)),
+        orden_articulos(cantidad,seccion,dimensiones,nota,articulo:articulos(id,nombre,categoria,stock_total,stock_danado,stock_perdido)),
         orden_horarios(id,hora,descripcion)
       `).order('fecha_inicio'),
       sb.from('personal').select('*').order('nombre'),
@@ -100,9 +100,10 @@ async function loadAll(){
       sb.from('articulos').select('*').order('nombre'),
       sb.from('compras').select('*, orden:ordenes(nombre_evento,cliente,fecha_inicio)').order('fecha_necesaria'),
       sb.from('produccion').select('*, orden:ordenes(nombre_evento,cliente,fecha_inicio)').order('fecha_necesaria'),
+      sb.from('incidencias_articulo').select('*, articulo:articulos(id,nombre), orden:ordenes(nombre_evento,cliente)').order('fecha_registro',{ascending:false}),
       sb.from('config').select('*').eq('id',1).single()
     ]);
-    for (const [name,res] of Object.entries({ordenes:ordenesRes,personal:personalRes,unidades:unidadesRes,venues:venuesRes,articulos:articulosRes,compras:comprasRes,produccion:produccionRes})){
+    for (const [name,res] of Object.entries({ordenes:ordenesRes,personal:personalRes,unidades:unidadesRes,venues:venuesRes,articulos:articulosRes,compras:comprasRes,produccion:produccionRes,incidencias:incidenciasRes})){
       if(res.error) throw new Error(name+': '+res.error.message);
     }
     DB.ordenes = ordenesRes.data||[];
@@ -112,6 +113,7 @@ async function loadAll(){
     DB.articulos = articulosRes.data||[];
     DB.compras = comprasRes.data||[];
     DB.produccion = produccionRes.data||[];
+    DB.incidencias = incidenciasRes.data||[];
     DB.config = configRes.data||{temporada_alta_meses:[],plantilla_staff:0,plantilla_encargados:0,plantilla_choferes:0};
     renderHeader();
     renderCurrentTab();
@@ -238,6 +240,7 @@ function abrirModalOrden(orden){
   document.getElementById('btnDelOrden').style.display = orden ? '' : 'none';
   document.getElementById('modalOrdenBody').innerHTML = ordenFormHTML(orden);
   renderSubPersonal(); renderSubUnidades(); renderSubArticulos(); renderSubHorarios(); renderSubCargos();
+  if(orden){ renderCondicionRows(); renderCondicionHistorial(orden.id); }
   document.getElementById('modalOrden').classList.add('open');
 }
 function cerrarModales(){ document.querySelectorAll('.modal-overlay').forEach(m=>m.classList.remove('open')); }
@@ -314,6 +317,14 @@ function ordenFormHTML(o){
     <input id="descHorarioAdd" placeholder="Descripción (ej. Llega camión, inicia montaje…)">
     <button class="btn-add-seg" onclick="agregarHorario()">Agregar</button>
   </div>
+
+  ${o.id ? `
+  <div class="form-section-label">Condición al regreso</div>
+  <div id="condicionRows"></div>
+  <div class="form-row full"><div class="form-group"><label>Nota general de esta revisión</label><textarea id="condicionNota" placeholder="Ej. Todo llegó completo y limpio / faltó una silla, se rompió un mantel…"></textarea></div></div>
+  <button class="btn-add-seg" type="button" onclick="registrarCondicion('${o.id}')">Registrar condición al regreso</button>
+  <div id="condicionHistorial"></div>
+  ` : ''}
   `;
 }
 function renderSubCargos(){
@@ -353,8 +364,9 @@ window.agregarArticulo = function(){
   modalOrdenState.articulos.push({articulo_id:id, cantidad:cant, seccion:seccion||null, dimensiones:null, nota:null});
   document.getElementById('seccionArticuloAdd').value=''; document.getElementById('cantArticuloAdd').value='1';
   renderSubArticulos();
+  renderCondicionRows();
 };
-window.quitarArticulo = function(i){ modalOrdenState.articulos.splice(i,1); renderSubArticulos(); };
+window.quitarArticulo = function(i){ modalOrdenState.articulos.splice(i,1); renderSubArticulos(); renderCondicionRows(); };
 
 function renderSubHorarios(){
   document.getElementById('subHorarios').innerHTML = modalOrdenState.horarios.map((h,i)=>`<div class="chip">${(h.hora||'').slice(0,5)} — ${escapeHtml(h.descripcion)}<button onclick="quitarHorario(${i})">✕</button></div>`).join('') || `<div class="sub-empty">Sin horarios agregados todavía.</div>`;
@@ -367,6 +379,63 @@ window.agregarHorario = function(){
   renderSubHorarios();
 };
 window.quitarHorario = function(i){ modalOrdenState.horarios.splice(i,1); renderSubHorarios(); };
+
+/* ── Condición al regreso (control de daños) ── */
+function renderCondicionRows(){
+  const el = document.getElementById('condicionRows'); if(!el) return;
+  if(!modalOrdenState.articulos.length){ el.innerHTML = `<div class="sub-empty">Esta orden no tiene artículos capturados.</div>`; return; }
+  const rows = modalOrdenState.articulos.map((a,i)=>{
+    const art = DB.articulos.find(x=>x.id===a.articulo_id);
+    return `<tr>
+      <td>${escapeHtml(art?.nombre||'—')}</td>
+      <td class="r">${a.cantidad}</td>
+      <td class="r"><input type="number" min="0" max="${a.cantidad}" value="0" id="cond_danada_${i}" style="width:64px;text-align:right;border:1px solid var(--linea);border-radius:5px;padding:5px 7px"></td>
+      <td class="r"><input type="number" min="0" max="${a.cantidad}" value="0" id="cond_faltante_${i}" style="width:64px;text-align:right;border:1px solid var(--linea);border-radius:5px;padding:5px 7px"></td>
+    </tr>`;
+  }).join('');
+  el.innerHTML = `<table><thead><tr><th>Artículo</th><th class="r">Enviado</th><th class="r">Dañado</th><th class="r">Faltante</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function renderCondicionHistorial(ordenId){
+  const el = document.getElementById('condicionHistorial'); if(!el) return;
+  const historial = DB.incidencias.filter(i=>i.orden_id===ordenId);
+  el.innerHTML = `<div class="form-section-label">Historial de revisiones de esta orden</div>` + (historial.length ? `<table><thead><tr><th style="width:110px">Fecha</th><th>Artículo</th><th class="r" style="width:70px">Dañado</th><th class="r" style="width:70px">Faltante</th><th>Nota</th></tr></thead><tbody>${historial.map(h=>`
+    <tr><td>${fmtDate((h.fecha_registro||'').slice(0,10))}</td><td>${escapeHtml(h.articulo?.nombre||'—')}</td><td class="r">${h.cantidad_danada}</td><td class="r">${h.cantidad_faltante}</td><td>${escapeHtml(h.nota||'—')}</td></tr>`).join('')}</tbody></table>` : `<div class="sub-empty">Sin revisiones registradas todavía.</div>`);
+}
+window.registrarCondicion = async function(ordenId){
+  const filas = modalOrdenState.articulos.map((a,i)=>({
+    articulo_id: a.articulo_id,
+    danada: parseInt(document.getElementById('cond_danada_'+i).value)||0,
+    faltante: parseInt(document.getElementById('cond_faltante_'+i).value)||0
+  })).filter(f=>f.danada>0 || f.faltante>0);
+  const nota = document.getElementById('condicionNota').value.trim() || null;
+  if(!filas.length){ toast('Marca al menos un artículo dañado o faltante para registrar.', true); return; }
+  showLoading(true);
+  try{
+    const inserts = filas.map(f=>({orden_id:ordenId, articulo_id:f.articulo_id, cantidad_danada:f.danada, cantidad_faltante:f.faltante, nota}));
+    const {error:errIns} = await sb.from('incidencias_articulo').insert(inserts);
+    if(errIns) throw errIns;
+    // sumar por artículo (por si el mismo artículo aparece más de una vez en la orden)
+    const porArticulo = {};
+    filas.forEach(f=>{
+      if(!porArticulo[f.articulo_id]) porArticulo[f.articulo_id] = {danada:0, faltante:0};
+      porArticulo[f.articulo_id].danada += f.danada;
+      porArticulo[f.articulo_id].faltante += f.faltante;
+    });
+    for(const [articuloId, sums] of Object.entries(porArticulo)){
+      const art = DB.articulos.find(a=>a.id===articuloId);
+      if(!art) continue;
+      const {error:errUpd} = await sb.from('articulos').update({
+        stock_danado: (art.stock_danado||0) + sums.danada,
+        stock_perdido: (art.stock_perdido||0) + sums.faltante
+      }).eq('id', articuloId);
+      if(errUpd) throw errUpd;
+    }
+    toast('Condición registrada. El inventario disponible se actualizó.');
+    cerrarModales();
+    await loadAll();
+  }catch(err){ console.error(err); toast('Error al registrar: '+err.message, true); }
+  finally{ showLoading(false); }
+};
 
 document.getElementById('btnSaveOrden').addEventListener('click', async ()=>{
   const cliente = document.getElementById('of_cliente').value.trim();
@@ -708,9 +777,10 @@ function computeAlerts(){
   porDiaArticulo.forEach((cant,key)=>{
     const [iso,artId] = key.split('|');
     const art = DB.articulos.find(a=>a.id===artId);
-    if(art && cant>art.stock_total){
+    const disponible = art ? art.stock_total - (art.stock_danado||0) - (art.stock_perdido||0) : 0;
+    if(art && cant>disponible){
       alerts.push({tipo:'articulo', icono:'📦', titulo:'Cruce de mobiliario', fecha:fmtDate(iso),
-        desc:`Se piden ${cant} × "${art.nombre}" pero el stock total es ${art.stock_total}.`});
+        desc:`Se piden ${cant} × "${art.nombre}" pero solo hay ${disponible} disponibles (de ${art.stock_total} totales${art.stock_danado?`, ${art.stock_danado} dañados`:''}${art.stock_perdido?`, ${art.stock_perdido} perdidos`:''}).`});
     }
   });
 
@@ -721,6 +791,16 @@ function computeAlerts(){
     if((o.personal_requerido||0) > asignado){
       alerts.push({tipo:'capacidad', icono:'⚠', titulo:'Falta personal por asignar', fecha:fmtDate(o.fecha_inicio),
         desc:`"${o.nombre_evento}" (${o.cliente}) requiere ${o.personal_requerido} y solo tiene ${asignado} asignado(s).`});
+    }
+  });
+
+  // 5. Recordatorio — orden ya pasó y nadie registró la condición del mobiliario al regreso
+  const hoyIsoRev = isoLocal(today());
+  activas.filter(o=>o.fecha_fin && o.fecha_fin<hoyIsoRev && (o.orden_articulos||[]).length>0).forEach(o=>{
+    const tieneRegistro = DB.incidencias.some(i=>i.orden_id===o.id);
+    if(!tieneRegistro){
+      alerts.push({tipo:'condicion', icono:'🔍', titulo:'Falta revisar condición al regreso', fecha:fmtDate(o.fecha_fin),
+        desc:`"${o.nombre_evento}" (${o.cliente}) ya terminó y nadie ha registrado si el mobiliario volvió completo y en buen estado.`});
     }
   });
 
@@ -897,8 +977,9 @@ document.getElementById('btnNuevoVenue').addEventListener('click', ()=>abrirGenM
 const CFG_ARTICULOS = { table:'articulos', titulo:'artículo', fields:[
   {name:'nombre', label:'Nombre', required:true},
   {name:'categoria', label:'Categoría'},
-  {name:'stock_total', label:'Stock total', type:'number', required:true},
-  {name:'estado_mantenimiento', label:'Estado de mantenimiento', type:'select', options:['Bueno','Necesita revisión','Malo'], default:'Bueno'},
+  {name:'stock_total', label:'Stock total (que posees)', type:'number', required:true},
+  {name:'stock_danado', label:'Dañado ahora mismo', type:'number', default:0},
+  {name:'stock_perdido', label:'Perdido / extraviado', type:'number', default:0},
   {name:'proxima_revision', label:'Próxima revisión', type:'date'},
   {name:'responsable_mantenimiento', label:'Responsable'},
   {name:'notas', label:'Notas', type:'textarea'}
@@ -906,11 +987,17 @@ const CFG_ARTICULOS = { table:'articulos', titulo:'artículo', fields:[
 function renderInventarioTab(){
   const q = state.articuloBusqueda.toLowerCase();
   const list = DB.articulos.filter(a=>!q || a.nombre.toLowerCase().includes(q));
-  document.getElementById('tbArticulos').innerHTML = list.map(a=>`
-    <tr class="fila-data" onclick='abrirGenModal(CFG_ARTICULOS, ${JSON.stringify(a).replace(/'/g,"&#39;")})'>
-      <td>${escapeHtml(a.nombre)}</td><td>${escapeHtml(a.categoria||'—')}</td><td class="r">${a.stock_total}</td>
-      <td>${badge(a.estado_mantenimiento)}</td><td>${a.proxima_revision?fmtDate(a.proxima_revision):'—'}</td>
-    </tr>`).join('') || `<tr><td colspan="5"><div class="empty-state"><p>Sin resultados.</p></div></td></tr>`;
+  document.getElementById('tbArticulos').innerHTML = list.map(a=>{
+    const disponible = a.stock_total - (a.stock_danado||0) - (a.stock_perdido||0);
+    return `<tr class="fila-data" onclick='abrirGenModal(CFG_ARTICULOS, ${JSON.stringify(a).replace(/'/g,"&#39;")})'>
+      <td>${escapeHtml(a.nombre)}</td><td>${escapeHtml(a.categoria||'—')}</td>
+      <td class="r">${a.stock_total}</td>
+      <td class="r" style="color:${a.stock_danado>0?'var(--rojo)':'var(--suave)'}">${a.stock_danado||0}</td>
+      <td class="r" style="color:${a.stock_perdido>0?'var(--rojo)':'var(--suave)'}">${a.stock_perdido||0}</td>
+      <td class="r" style="font-weight:600;color:${disponible<=0?'var(--rojo)':'var(--verde)'}">${disponible}</td>
+      <td>${a.proxima_revision?fmtDate(a.proxima_revision):'—'}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="7"><div class="empty-state"><p>Sin resultados.</p></div></td></tr>`;
 }
 document.getElementById('buscarArticulo').addEventListener('input', e=>{ state.articuloBusqueda=e.target.value; renderInventarioTab(); });
 document.getElementById('btnNuevoArticulo').addEventListener('click', ()=>abrirGenModal(CFG_ARTICULOS,null));
