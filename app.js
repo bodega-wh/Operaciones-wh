@@ -519,6 +519,242 @@ function confirmar(msg, cb){ document.getElementById('confirmMsg').textContent=m
 document.getElementById('confirmNo').addEventListener('click', ()=>document.getElementById('confirmOverlay').classList.remove('open'));
 document.getElementById('confirmYes').addEventListener('click', ()=>{ document.getElementById('confirmOverlay').classList.remove('open'); if(confirmCallback) confirmCallback(); });
 
+/* ══════════════════════════ IMPORTAR ORDEN DESDE PDF ══════════════════════════ */
+if (window.pdfjsLib) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+document.getElementById('btnImportarPdf').addEventListener('click', ()=>document.getElementById('inputPdfOrden').click());
+document.getElementById('inputPdfOrden').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  e.target.value = ''; // permite volver a elegir el mismo archivo después
+  if(!file) return;
+  showLoading(true);
+  try{
+    const texto = await extraerTextoPdf(file);
+    const parsed = parsearOrdenPdf(texto);
+    abrirRevisionImportacion(parsed);
+  }catch(err){
+    console.error(err);
+    toast('No se pudo leer el PDF: '+err.message, true);
+  }finally{
+    showLoading(false);
+  }
+});
+
+/* Lee todas las páginas del PDF y reconstruye el texto línea por línea (agrupando por posición vertical) */
+async function extraerTextoPdf(file){
+  const buffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data: buffer}).promise;
+  const lineasTotal = [];
+  for(let n=1; n<=pdf.numPages; n++){
+    const page = await pdf.getPage(n);
+    const content = await page.getTextContent();
+    const porY = new Map(); // y redondeada -> [{x,str}]
+    content.items.forEach(it=>{
+      const y = Math.round(it.transform[5]);
+      const x = it.transform[4];
+      if(!porY.has(y)) porY.set(y, []);
+      porY.get(y).push({x, str: it.str});
+    });
+    const ys = [...porY.keys()].sort((a,b)=>b-a); // de arriba hacia abajo
+    ys.forEach(y=>{
+      const linea = porY.get(y).sort((a,b)=>a.x-b.x).map(t=>t.str).join(' ').replace(/\s+/g,' ').trim();
+      if(linea) lineasTotal.push(linea);
+    });
+  }
+  return lineasTotal;
+}
+
+/* Convierte "05/11/2022" -> "2022-11-05" */
+function fechaPdfAIso(s){
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if(!m) return null;
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
+/* Convierte "7:00 AM" / "3:16 PM" -> "19:00:00" / "15:16:00" */
+function horaPdfA24h(s){
+  const m = s.match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+  if(!m) return null;
+  let h = parseInt(m[1],10); const min = m[2]; const ampm = m[3].toUpperCase();
+  if(ampm==='PM' && h!==12) h+=12;
+  if(ampm==='AM' && h===12) h=0;
+  return `${String(h).padStart(2,'0')}:${min}:00`;
+}
+/* Quita todos los espacios y pasa a mayúsculas — para comparar etiquetas sin importar el espaciado que deje el PDF */
+function compacto(s){ return (s||'').replace(/\s+/g,'').toUpperCase(); }
+
+function parsearOrdenPdf(lineas){
+  const core = { cliente:null, coordinador:null, rep:null, venueTexto:null, fecha_inicio:null, hora_inicio:null };
+  const items = [];
+  const cargos = [];
+  const warnings = [];
+
+  for(let i=0;i<lineas.length;i++){
+    const linea = lineas[i];
+    const c = compacto(linea);
+
+    if(c==='CUSTOMER'){
+      const val = (lineas[i+1]||'').trim();
+      if(val && compacto(val)!=='COORDINATOR') core.cliente = val;
+    }
+    if(c==='COORDINATOR'){
+      const val = (lineas[i+1]||'').trim();
+      if(val && compacto(val)!=='VENUE') core.coordinador = val;
+    }
+    if(c==='VENUE'){
+      const val = (lineas[i+1]||'').trim();
+      // si la línea siguiente ya es el encabezado de la tabla de items, el venue venía vacío
+      if(val && !compacto(val).startsWith('ITEMDIMENSIONS') && !compacto(val).startsWith('RENTALREP')) core.venueTexto = val;
+    }
+    if(c.startsWith('RENTALREP')){
+      const val = linea.split(':').slice(1).join(':').trim();
+      if(val) core.rep = val;
+    }
+    if(c==='RENTALDATE'){
+      // las siguientes ~3 líneas traen: día de la semana, fecha, hora
+      for(let j=i+1;j<Math.min(i+5,lineas.length);j++){
+        const fecha = fechaPdfAIso(lineas[j]);
+        if(fecha) core.fecha_inicio = fecha;
+        const hora = horaPdfA24h(lineas[j]);
+        if(hora) core.hora_inicio = hora;
+      }
+    }
+
+    // filas de artículos: Nombre [Dimensiones|-] Cantidad $Precio $Total
+    const mItem = linea.match(/^(.+?)\s+(-|[\d.]+(?:\s*[×x]\s*[\d.]+){1,2})\s+(\d+)\s+\$\s?([\d,]+\.\d{2})\s+\$\s?([\d,]+\.\d{2})\s*$/);
+    if(mItem){
+      items.push({
+        nombre: mItem[1].trim(),
+        dimensiones: mItem[2]==='-' ? null : mItem[2].trim(),
+        cantidad: parseInt(mItem[3],10)
+      });
+      continue;
+    }
+    // filas de cargos/depósitos: Cantidad Porcentaje% $Total (sin nombre de artículo real, el % reemplaza al precio)
+    const mCargo = linea.match(/^-?\s*(\d+)\s+([\d.]+)%\s+\$\s?([\d,]+\.\d{2})/);
+    if(mCargo){
+      const desc = (lineas[i-1]||'Cargo adicional').split('|')[0].trim();
+      cargos.push(`${desc}: ${mCargo[2]}% ($${mCargo[3]})`);
+    }
+  }
+
+  if(!core.cliente) warnings.push('No se detectó el cliente — revísalo manualmente.');
+  if(!core.fecha_inicio) warnings.push('No se detectó la fecha del evento — revísala manualmente.');
+  if(!items.length) warnings.push('No se detectó ningún artículo en la tabla.');
+
+  return { core, items, cargos, warnings };
+}
+
+/* ── Modal de revisión: confirma o crea los artículos antes de armar la orden ── */
+let importacionState = null;
+function abrirRevisionImportacion(parsed){
+  // intenta emparejar cada item con el catálogo existente (coincidencia exacta, sin importar mayúsculas)
+  const resueltos = parsed.items.map(it=>{
+    const match = DB.articulos.find(a=>a.nombre.trim().toLowerCase()===it.nombre.trim().toLowerCase());
+    return { ...it, articulo_id: match ? match.id : null };
+  });
+  // intenta emparejar el venue
+  let venueId = null;
+  if(parsed.core.venueTexto){
+    const matchVenue = DB.venues.find(v=>v.nombre.trim().toLowerCase()===parsed.core.venueTexto.trim().toLowerCase());
+    if(matchVenue) venueId = matchVenue.id;
+  }
+  importacionState = { core: parsed.core, venueId, cargos: parsed.cargos, items: resueltos };
+
+  const warningsHtml = parsed.warnings.length ? `<div class="alerta-box"><div class="av-ico">⚠</div><div><div class="av-title">Revisa antes de continuar</div><div class="av-desc">${parsed.warnings.map(escapeHtml).join('<br>')}</div></div></div>` : '';
+
+  const resumenHtml = `
+    <div class="detalle-grid">
+      <div class="dg-item"><div class="dg-lbl">Cliente</div><div class="dg-val">${escapeHtml(parsed.core.cliente||'— no detectado —')}</div></div>
+      <div class="dg-item"><div class="dg-lbl">Coordinador</div><div class="dg-val">${escapeHtml(parsed.core.coordinador||'—')}</div></div>
+      <div class="dg-item"><div class="dg-lbl">Rep. comercial</div><div class="dg-val">${escapeHtml(parsed.core.rep||'—')}</div></div>
+      <div class="dg-item"><div class="dg-lbl">Fecha del evento</div><div class="dg-val">${parsed.core.fecha_inicio?fmtDate(parsed.core.fecha_inicio):'— no detectada —'}</div></div>
+      <div class="dg-item"><div class="dg-lbl">Venue (PDF)</div><div class="dg-val">${escapeHtml(parsed.core.venueTexto||'—')} ${parsed.core.venueTexto && !venueId ? '<span class="tag-warn">no está en tu catálogo</span>':''}</div></div>
+    </div>`;
+
+  const itemsHtml = resueltos.length ? `<table><thead><tr><th>Artículo (del PDF)</th><th style="width:110px">Dimensiones</th><th class="r" style="width:70px">Cant.</th><th style="width:260px">Vincular a</th></tr></thead><tbody>
+    ${resueltos.map((it,i)=>`<tr>
+      <td>${escapeHtml(it.nombre)}</td>
+      <td>${escapeHtml(it.dimensiones||'—')}</td>
+      <td class="r">${it.cantidad}</td>
+      <td>
+        <select id="resolver_${i}" style="width:100%;padding:6px 8px;border:1px solid var(--linea);border-radius:5px">
+          <option value="__nuevo__" ${!it.articulo_id?'selected':''}>+ Crear artículo nuevo</option>
+          ${DB.articulos.map(a=>`<option value="${a.id}" ${it.articulo_id===a.id?'selected':''}>${escapeHtml(a.nombre)}</option>`).join('')}
+        </select>
+        ${!it.articulo_id?`<div class="sub-empty">Se creará con stock inicial = ${it.cantidad} (ajústalo luego en Inventario)</div>`:`<div class="sub-empty">✓ Coincide con tu catálogo</div>`}
+      </td>
+    </tr>`).join('')}
+  </tbody></table>` : `<div class="sub-empty">No se detectaron artículos.</div>`;
+
+  const cargosHtml = parsed.cargos.length ? `<div class="form-section-label">Cargos detectados</div><div class="chip-list">${parsed.cargos.map(c=>`<div class="chip">${escapeHtml(c)}</div>`).join('')}</div>` : '';
+
+  document.getElementById('importarPdfBody').innerHTML = `
+    ${warningsHtml}
+    <div class="form-section-label">Datos generales detectados</div>
+    ${resumenHtml}
+    <div class="form-section-label">Artículos detectados (${resueltos.length})</div>
+    ${itemsHtml}
+    ${cargosHtml}
+  `;
+  document.getElementById('modalImportarPdf').classList.add('open');
+}
+
+document.getElementById('btnContinuarImportacion').addEventListener('click', async ()=>{
+  showLoading(true);
+  try{
+    const articulosFinales = [];
+    for(let i=0;i<importacionState.items.length;i++){
+      const it = importacionState.items[i];
+      const sel = document.getElementById('resolver_'+i).value;
+      let articuloId = sel;
+      if(sel==='__nuevo__'){
+        const {data, error} = await sb.from('articulos').insert({
+          nombre: it.nombre, categoria: null, stock_total: it.cantidad, stock_danado:0, stock_perdido:0
+        }).select('id').single();
+        if(error) throw error;
+        articuloId = data.id;
+      }
+      articulosFinales.push({articulo_id: articuloId, cantidad: it.cantidad, seccion:null, dimensiones: it.dimensiones, nota:null});
+    }
+    await loadAll(); // refresca catálogo de artículos (por los recién creados) antes de armar el formulario
+    cerrarModales();
+    abrirModalOrdenImportado(importacionState, articulosFinales);
+  }catch(err){
+    console.error(err);
+    toast('Error al preparar la orden: '+err.message, true);
+  }finally{
+    showLoading(false);
+  }
+});
+
+function abrirModalOrdenImportado(importado, articulosFinales){
+  const c = importado.core;
+  modalOrdenState = nuevoModalOrdenState();
+  modalOrdenState.articulos = articulosFinales;
+  modalOrdenState.cargos = [...importado.cargos];
+  const datosCore = {
+    cliente: c.cliente || '',
+    nombre_evento: c.cliente || '',
+    coordinador: c.coordinador || '',
+    rep: c.rep || '',
+    venue_id: importado.venueId || null,
+    fecha_inicio: c.fecha_inicio || '',
+    fecha_fin: c.fecha_inicio || '',
+    hora_inicio: c.hora_inicio || '',
+    fecha_entrega_mobiliario: c.fecha_inicio || '',
+    fecha_recogida_mobiliario: c.fecha_inicio || '',
+    notas: c.venueTexto && !importado.venueId ? `Venue detectado en el PDF (no está en tu catálogo): ${c.venueTexto}` : ''
+  };
+  document.getElementById('modalOrdenTitulo').innerHTML = `Nueva <em>orden</em> — importada de PDF`;
+  document.getElementById('btnDelOrden').style.display = 'none';
+  document.getElementById('modalOrdenBody').innerHTML = ordenFormHTML(datosCore);
+  renderSubPersonal(); renderSubUnidades(); renderSubArticulos(); renderSubHorarios(); renderSubCargos();
+  document.getElementById('modalOrden').classList.add('open');
+  toast('Revisa los datos y da clic en Guardar para crear la orden.');
+}
+
 /* ══════════════════════════ PLANEACIÓN SEMANAL ══════════════════════════ */
 function renderSemanaTab(){
   const base = addDays(startOfWeek(today()), state.semanaOffset*7);

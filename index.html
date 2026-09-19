@@ -369,6 +369,8 @@ table.gantt-table th.hoy{color:var(--dorado);font-weight:700}
         <div class="tabla-title">Órdenes</div>
         <div class="tabla-actions">
           <input type="search" class="tabla-buscar" id="buscarOrden" placeholder="Buscar cliente, evento o venue…">
+          <button class="btn-export" id="btnImportarPdf">Importar desde PDF</button>
+          <input type="file" id="inputPdfOrden" accept="application/pdf" style="display:none">
           <button class="btn-nuevo" id="btnNuevaOrden"><span class="plus">+</span> Nueva orden</button>
         </div>
       </div>
@@ -658,6 +660,24 @@ table.gantt-table th.hoy{color:var(--dorado);font-weight:700}
   </div>
 </div>
 
+<!-- ═══ MODAL REVISIÓN DE IMPORTACIÓN PDF ═══ -->
+<div class="modal-overlay" id="modalImportarPdf">
+  <div class="modal wide">
+    <div class="modal-head">
+      <h3>Revisar <em>importación</em></h3>
+      <button class="modal-close" data-close>✕</button>
+    </div>
+    <div class="modal-body" id="importarPdfBody"></div>
+    <div class="modal-foot">
+      <div class="btn-foot-left"></div>
+      <div style="display:flex;gap:10px">
+        <button class="btn-cancel" data-close>Cancelar</button>
+        <button class="btn-save" id="btnContinuarImportacion">Continuar → llenar orden</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL GENÉRICO (catálogos: personal, unidades, venues, artículos, compras, producción) ═══ -->
 <div class="modal-overlay" id="modalGenerico">
   <div class="modal">
@@ -692,6 +712,7 @@ table.gantt-table th.hoy{color:var(--dorado);font-weight:700}
 <div class="hover-tooltip" id="hoverTooltip"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
