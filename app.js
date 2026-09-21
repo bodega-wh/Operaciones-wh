@@ -255,7 +255,8 @@ function ordenFormHTML(o){
   <div class="form-section-label">Datos generales</div>
   <div class="form-row">
     <div class="form-group"><label>Cliente <span class="req">*</span></label><input id="of_cliente" value="${escapeHtml(o.cliente||'')}"></div>
-    <div class="form-group"><label>Nombre del evento <span class="req">*</span></label><input id="of_nombre_evento" value="${escapeHtml(o.nombre_evento||'')}"></div>
+    <div class="form-group"><label>Orden <span class="req">*</span></label><input id="of_nombre_evento" value="${escapeHtml(o.nombre_evento||'')}"></div>
+    <div class="form-group"><label>Fecha de actualización</label><input type="date" id="of_fecha_actualizacion" value="${o.fecha_actualizacion_externa||''}"></div>
   </div>
   <div class="form-row">
     <div class="form-group"><label>Tipo</label><select id="of_tipo">${['Delivery','Pull-Ticket','Otro'].map(t=>`<option ${o.tipo===t?'selected':''}>${t}</option>`).join('')}</select></div>
@@ -269,15 +270,23 @@ function ordenFormHTML(o){
   </div>
   <div class="form-section-label">Fechas y logística</div>
   <div class="form-row">
-    <div class="form-group"><label>Fecha inicio <span class="req">*</span></label><input type="date" id="of_fecha_inicio" value="${o.fecha_inicio||''}"></div>
-    <div class="form-group"><label>Fecha fin</label><input type="date" id="of_fecha_fin" value="${o.fecha_fin||''}"></div>
+    <div class="form-group"><label>Fecha de evento <span class="req">*</span></label><input type="date" id="of_fecha_inicio" value="${o.fecha_inicio||''}"></div>
     <div class="form-group"><label>Hora inicio</label><input type="time" id="of_hora_inicio" value="${(o.hora_inicio||'').slice(0,5)}"></div>
     <div class="form-group"><label>Hora fin</label><input type="time" id="of_hora_fin" value="${(o.hora_fin||'').slice(0,5)}"></div>
+    <div class="form-group"><label>Pax</label><input type="number" id="of_pax" value="${o.pax??0}"></div>
   </div>
   <div class="form-row">
-    <div class="form-group"><label>Entrega mobiliario</label><input type="date" id="of_fecha_entrega" value="${o.fecha_entrega_mobiliario||''}"></div>
-    <div class="form-group"><label>Recogida mobiliario</label><input type="date" id="of_fecha_recogida" value="${o.fecha_recogida_mobiliario||''}"></div>
-    <div class="form-group"><label>Pax</label><input type="number" id="of_pax" value="${o.pax??0}"></div>
+    <div class="form-group"><label>Recolección mobiliario</label><input type="date" id="of_fecha_recogida" value="${o.fecha_recogida_mobiliario||''}"></div>
+    <div class="form-group" style="justify-content:center">
+      <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--suave);font-weight:500;cursor:pointer">
+        <input type="checkbox" id="of_premontaje_check" ${(o.premontaje_inicio||o.premontaje_fin)?'checked':''} onchange="document.getElementById('premontajeFechas').style.display=this.checked?'flex':'none'">
+        Aplica premontaje
+      </label>
+    </div>
+  </div>
+  <div class="form-row" id="premontajeFechas" style="display:${(o.premontaje_inicio||o.premontaje_fin)?'flex':'none'}">
+    <div class="form-group"><label>Premontaje — inicio</label><input type="date" id="of_premontaje_inicio" value="${o.premontaje_inicio||''}"></div>
+    <div class="form-group"><label>Premontaje — fin</label><input type="date" id="of_premontaje_fin" value="${o.premontaje_fin||''}"></div>
   </div>
   <div class="form-row">
     <div class="form-group"><label>Personal requerido</label><input type="number" id="of_personal_requerido" value="${o.personal_requerido??0}"></div>
@@ -441,7 +450,7 @@ document.getElementById('btnSaveOrden').addEventListener('click', async ()=>{
   const cliente = document.getElementById('of_cliente').value.trim();
   const nombre_evento = document.getElementById('of_nombre_evento').value.trim();
   const fecha_inicio = document.getElementById('of_fecha_inicio').value;
-  if(!cliente || !nombre_evento || !fecha_inicio){ toast('Cliente, nombre del evento y fecha de inicio son obligatorios.', true); return; }
+  if(!cliente || !nombre_evento || !fecha_inicio){ toast('Cliente, orden y fecha de evento son obligatorios.', true); return; }
   const payload = {
     cliente, nombre_evento,
     tipo: document.getElementById('of_tipo').value,
@@ -451,11 +460,12 @@ document.getElementById('btnSaveOrden').addEventListener('click', async ()=>{
     coordinador_email: document.getElementById('of_coordinador_email').value.trim() || null,
     rep: document.getElementById('of_rep').value.trim() || null,
     fecha_inicio,
-    fecha_fin: document.getElementById('of_fecha_fin').value || null,
     hora_inicio: document.getElementById('of_hora_inicio').value || null,
     hora_fin: document.getElementById('of_hora_fin').value || null,
-    fecha_entrega_mobiliario: document.getElementById('of_fecha_entrega').value || null,
     fecha_recogida_mobiliario: document.getElementById('of_fecha_recogida').value || null,
+    fecha_actualizacion_externa: document.getElementById('of_fecha_actualizacion').value || null,
+    premontaje_inicio: document.getElementById('of_premontaje_check').checked ? (document.getElementById('of_premontaje_inicio').value || null) : null,
+    premontaje_fin: document.getElementById('of_premontaje_check').checked ? (document.getElementById('of_premontaje_fin').value || null) : null,
     pax: parseInt(document.getElementById('of_pax').value)||0,
     personal_requerido: parseInt(document.getElementById('of_personal_requerido').value)||0,
     personal_externo_contratado: parseInt(document.getElementById('of_personal_externo').value)||0,
@@ -581,11 +591,17 @@ function horaPdfA24h(s){
   if(ampm==='AM' && h===12) h=0;
   return `${String(h).padStart(2,'0')}:${min}:00`;
 }
+/* Busca una fecha DD/MM/AAAA dentro de una línea que puede traer texto adicional (a diferencia de fechaPdfAIso que exige que la línea sea solo la fecha) */
+function extraerFechaDeLinea(s){
+  const m = (s||'').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if(!m) return null;
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
 /* Quita todos los espacios y pasa a mayúsculas — para comparar etiquetas sin importar el espaciado que deje el PDF */
 function compacto(s){ return (s||'').replace(/\s+/g,'').toUpperCase(); }
 
 function parsearOrdenPdf(lineas){
-  const core = { cliente:null, coordinador:null, rep:null, venueTexto:null, fecha_inicio:null, hora_inicio:null };
+  const core = { cliente:null, coordinador:null, rep:null, venueTexto:null, fecha_inicio:null, hora_inicio:null, numero_orden:null, fecha_actualizacion_externa:null };
   const items = [];
   const cargos = [];
   const warnings = [];
@@ -594,6 +610,19 @@ function parsearOrdenPdf(lineas){
     const linea = lineas[i];
     const c = compacto(linea);
 
+    // "O R D E R 4 2 8 5" (con letras espaciadas) -> compacto queda "ORDER4285"; el número de orden siempre son 4 dígitos
+    const mOrdenNum = c.match(/^ORDER(\d{4})$/);
+    if(mOrdenNum) core.numero_orden = mOrdenNum[1];
+
+    // "Order Last Modified: 14/09/2026 12:25 PM" — el extractor de PDF a veces pierde la "f" de "fi"
+    // y queda "Order Last Modied", por eso comparamos solo el prefijo "ORDERLASTMODI"
+    if(c.startsWith('ORDERLASTMODI')){
+      let fecha = extraerFechaDeLinea(linea);
+      if(!fecha){
+        for(let j=i+1;j<Math.min(i+3,lineas.length);j++){ fecha = extraerFechaDeLinea(lineas[j]); if(fecha) break; }
+      }
+      if(fecha) core.fecha_actualizacion_externa = fecha;
+    }
     if(c==='CUSTOMER'){
       const val = (lineas[i+1]||'').trim();
       if(val && compacto(val)!=='COORDINATOR') core.cliente = val;
@@ -640,6 +669,7 @@ function parsearOrdenPdf(lineas){
   }
 
   if(!core.cliente) warnings.push('No se detectó el cliente — revísalo manualmente.');
+  if(!core.numero_orden) warnings.push('No se detectó el número de orden — revísalo manualmente.');
   if(!core.fecha_inicio) warnings.push('No se detectó la fecha del evento — revísala manualmente.');
   if(!items.length) warnings.push('No se detectó ningún artículo en la tabla.');
 
@@ -666,10 +696,12 @@ function abrirRevisionImportacion(parsed){
 
   const resumenHtml = `
     <div class="detalle-grid">
+      <div class="dg-item"><div class="dg-lbl">Orden (#)</div><div class="dg-val">${escapeHtml(parsed.core.numero_orden||'— no detectado —')}</div></div>
       <div class="dg-item"><div class="dg-lbl">Cliente</div><div class="dg-val">${escapeHtml(parsed.core.cliente||'— no detectado —')}</div></div>
       <div class="dg-item"><div class="dg-lbl">Coordinador</div><div class="dg-val">${escapeHtml(parsed.core.coordinador||'—')}</div></div>
       <div class="dg-item"><div class="dg-lbl">Rep. comercial</div><div class="dg-val">${escapeHtml(parsed.core.rep||'—')}</div></div>
       <div class="dg-item"><div class="dg-lbl">Fecha del evento</div><div class="dg-val">${parsed.core.fecha_inicio?fmtDate(parsed.core.fecha_inicio):'— no detectada —'}</div></div>
+      <div class="dg-item"><div class="dg-lbl">Fecha de actualización</div><div class="dg-val">${parsed.core.fecha_actualizacion_externa?fmtDate(parsed.core.fecha_actualizacion_externa):'—'}</div></div>
       <div class="dg-item"><div class="dg-lbl">Venue (PDF)</div><div class="dg-val">${escapeHtml(parsed.core.venueTexto||'—')} ${parsed.core.venueTexto && !venueId ? '<span class="tag-warn">no está en tu catálogo</span>':''}</div></div>
     </div>`;
 
@@ -736,14 +768,13 @@ function abrirModalOrdenImportado(importado, articulosFinales){
   modalOrdenState.cargos = [...importado.cargos];
   const datosCore = {
     cliente: c.cliente || '',
-    nombre_evento: c.cliente || '',
+    nombre_evento: c.numero_orden || '',
     coordinador: c.coordinador || '',
     rep: c.rep || '',
     venue_id: importado.venueId || null,
     fecha_inicio: c.fecha_inicio || '',
-    fecha_fin: c.fecha_inicio || '',
     hora_inicio: c.hora_inicio || '',
-    fecha_entrega_mobiliario: c.fecha_inicio || '',
+    fecha_actualizacion_externa: c.fecha_actualizacion_externa || '',
     fecha_recogida_mobiliario: c.fecha_inicio || '',
     notas: c.venueTexto && !importado.venueId ? `Venue detectado en el PDF (no está en tu catálogo): ${c.venueTexto}` : ''
   };
