@@ -276,11 +276,18 @@ function ordenFormHTML(o){
     <div class="form-group"><label>Pax</label><input type="number" id="of_pax" value="${o.pax??0}"></div>
   </div>
   <div class="form-row">
-    <div class="form-group"><label>Recolección mobiliario</label><input type="date" id="of_fecha_recogida" value="${o.fecha_recogida_mobiliario||''}"></div>
-    <div class="form-group" style="justify-content:center">
+    <div class="form-group"><label>Entrega mobiliario — inicio</label><input type="date" id="of_entrega_inicio" value="${o.entrega_inicio||''}"></div>
+    <div class="form-group"><label>Entrega mobiliario — fin</label><input type="date" id="of_entrega_fin" value="${o.entrega_fin||''}"></div>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label>Recolección mobiliario — inicio</label><input type="date" id="of_recoleccion_inicio" value="${o.recoleccion_inicio||''}"></div>
+    <div class="form-group"><label>Recolección mobiliario — fin</label><input type="date" id="of_recoleccion_fin" value="${o.recoleccion_fin||''}"></div>
+  </div>
+  <div class="form-row">
+    <div class="form-group" style="flex:0 0 auto">
       <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--suave);font-weight:500;cursor:pointer">
         <input type="checkbox" id="of_premontaje_check" ${(o.premontaje_inicio||o.premontaje_fin)?'checked':''} onchange="document.getElementById('premontajeFechas').style.display=this.checked?'flex':'none'">
-        Aplica premontaje
+        Premontaje
       </label>
     </div>
   </div>
@@ -462,8 +469,11 @@ document.getElementById('btnSaveOrden').addEventListener('click', async ()=>{
     fecha_inicio,
     hora_inicio: document.getElementById('of_hora_inicio').value || null,
     hora_fin: document.getElementById('of_hora_fin').value || null,
-    fecha_recogida_mobiliario: document.getElementById('of_fecha_recogida').value || null,
     fecha_actualizacion_externa: document.getElementById('of_fecha_actualizacion').value || null,
+    entrega_inicio: document.getElementById('of_entrega_inicio').value || null,
+    entrega_fin: document.getElementById('of_entrega_fin').value || null,
+    recoleccion_inicio: document.getElementById('of_recoleccion_inicio').value || null,
+    recoleccion_fin: document.getElementById('of_recoleccion_fin').value || null,
     premontaje_inicio: document.getElementById('of_premontaje_check').checked ? (document.getElementById('of_premontaje_inicio').value || null) : null,
     premontaje_fin: document.getElementById('of_premontaje_check').checked ? (document.getElementById('of_premontaje_fin').value || null) : null,
     pax: parseInt(document.getElementById('of_pax').value)||0,
@@ -597,14 +607,31 @@ function extraerFechaDeLinea(s){
   if(!m) return null;
   return `${m[3]}-${m[2]}-${m[1]}`;
 }
+/* Traduce el estado en inglés del PDF a las opciones del sistema. "Conrmed" cubre el caso donde el PDF pierde la "f" de "fi". */
+function estadoPdfATexto(val){
+  const v = compacto(val);
+  if(v.startsWith('CONFIRM') || v.startsWith('CONRM')) return 'Confirmada';
+  if(v.startsWith('PEND')) return 'Pendiente';
+  if(v.startsWith('CANCEL')) return 'Cancelada';
+  if(v.startsWith('COMPLET') || v.startsWith('FINISH') || v.startsWith('FINAL')) return 'Finalizada';
+  return null;
+}
+/* Las etiquetas propias del PDF (CUSTOMER, COORDINATOR, VENUE, RENTAL DATE) vienen con las letras separadas
+   por espacios ("V E N U E"). Esto evita que una anotación normal como "venue" o "Cliente" (sin espaciar)
+   se confunda con la etiqueta real, ya que compacto() las dejaría iguales. */
+function esEtiquetaEspaciada(linea, palabra){
+  const pat = new RegExp('^'+palabra.split('').join('\\s+')+'$','i');
+  return pat.test((linea||'').trim());
+}
 /* Quita todos los espacios y pasa a mayúsculas — para comparar etiquetas sin importar el espaciado que deje el PDF */
 function compacto(s){ return (s||'').replace(/\s+/g,'').toUpperCase(); }
 
 function parsearOrdenPdf(lineas){
-  const core = { cliente:null, coordinador:null, rep:null, venueTexto:null, fecha_inicio:null, hora_inicio:null, numero_orden:null, fecha_actualizacion_externa:null };
+  const core = { cliente:null, coordinador:null, rep:null, venueTexto:null, fecha_inicio:null, hora_inicio:null, numero_orden:null, fecha_actualizacion_externa:null, estado:null, entrega_inicio:null, entrega_fin:null, recoleccion_inicio:null, recoleccion_fin:null };
   const items = [];
   const cargos = [];
   const warnings = [];
+  const idxRentalDate = lineas.findIndex(l=>esEtiquetaEspaciada(l,'RENTALDATE'));
 
   for(let i=0;i<lineas.length;i++){
     const linea = lineas[i];
@@ -613,6 +640,13 @@ function parsearOrdenPdf(lineas){
     // "O R D E R 4 2 8 5" (con letras espaciadas) -> compacto queda "ORDER4285"; el número de orden siempre son 4 dígitos
     const mOrdenNum = c.match(/^ORDER(\d{4})$/);
     if(mOrdenNum) core.numero_orden = mOrdenNum[1];
+
+    // "Order Status: Confirmed" (o "Conrmed" por la ligadura fi perdida) -> Estado
+    if(c.startsWith('ORDERSTATUS')){
+      const val = linea.split(':').slice(1).join(':').trim();
+      const estado = estadoPdfATexto(val);
+      if(estado) core.estado = estado;
+    }
 
     // "Order Last Modified: 14/09/2026 12:25 PM" — el extractor de PDF a veces pierde la "f" de "fi"
     // y queda "Order Last Modied", por eso comparamos solo el prefijo "ORDERLASTMODI"
@@ -623,15 +657,15 @@ function parsearOrdenPdf(lineas){
       }
       if(fecha) core.fecha_actualizacion_externa = fecha;
     }
-    if(c==='CUSTOMER'){
+    if(esEtiquetaEspaciada(linea,'CUSTOMER')){
       const val = (lineas[i+1]||'').trim();
       if(val && compacto(val)!=='COORDINATOR') core.cliente = val;
     }
-    if(c==='COORDINATOR'){
+    if(esEtiquetaEspaciada(linea,'COORDINATOR')){
       const val = (lineas[i+1]||'').trim();
       if(val && compacto(val)!=='VENUE') core.coordinador = val;
     }
-    if(c==='VENUE'){
+    if(esEtiquetaEspaciada(linea,'VENUE')){
       const val = (lineas[i+1]||'').trim();
       // si la línea siguiente ya es el encabezado de la tabla de items, el venue venía vacío
       if(val && !compacto(val).startsWith('ITEMDIMENSIONS') && !compacto(val).startsWith('RENTALREP')) core.venueTexto = val;
@@ -640,7 +674,7 @@ function parsearOrdenPdf(lineas){
       const val = linea.split(':').slice(1).join(':').trim();
       if(val) core.rep = val;
     }
-    if(c==='RENTALDATE'){
+    if(esEtiquetaEspaciada(linea,'RENTALDATE')){
       // las siguientes ~3 líneas traen: día de la semana, fecha, hora
       for(let j=i+1;j<Math.min(i+5,lineas.length);j++){
         const fecha = fechaPdfAIso(lineas[j]);
@@ -667,6 +701,25 @@ function parsearOrdenPdf(lineas){
       cargos.push(`${desc}: ${mCargo[2]}% ($${mCargo[3]})`);
     }
   }
+
+  // "Delivery Window" y "Pickup Window": en el PDF cada una trae 2 fechas con hora (inicio y fin).
+  // El extractor de texto las deja como líneas sueltas "fecha" seguida de "hora" en el orden en que aparecen
+  // en el documento (después de "Rental Date" y de la tabla de artículos): primero Delivery Window
+  // (inicio, fin) y luego Pickup Window (inicio, fin). Se ignora el par que ya se usó para "Rental Date".
+  const paresFechaHora = [];
+  for(let i=0;i<lineas.length;i++){
+    if(idxRentalDate>=0 && i>idxRentalDate && i<=idxRentalDate+4) continue; // ya usado por Fecha de evento
+    const fecha = fechaPdfAIso(lineas[i]);
+    if(!fecha) continue;
+    const hora = horaPdfA24h(lineas[i+1]||'');
+    if(!hora) continue;
+    paresFechaHora.push(fecha);
+    i++; // ya se consumió la línea de la hora
+  }
+  if(paresFechaHora[0]) core.entrega_inicio = paresFechaHora[0];
+  if(paresFechaHora[1]) core.entrega_fin = paresFechaHora[1];
+  if(paresFechaHora[2]) core.recoleccion_inicio = paresFechaHora[2];
+  if(paresFechaHora[3]) core.recoleccion_fin = paresFechaHora[3];
 
   if(!core.cliente) warnings.push('No se detectó el cliente — revísalo manualmente.');
   if(!core.numero_orden) warnings.push('No se detectó el número de orden — revísalo manualmente.');
@@ -701,6 +754,9 @@ function abrirRevisionImportacion(parsed){
       <div class="dg-item"><div class="dg-lbl">Coordinador</div><div class="dg-val">${escapeHtml(parsed.core.coordinador||'—')}</div></div>
       <div class="dg-item"><div class="dg-lbl">Rep. comercial</div><div class="dg-val">${escapeHtml(parsed.core.rep||'—')}</div></div>
       <div class="dg-item"><div class="dg-lbl">Fecha del evento</div><div class="dg-val">${parsed.core.fecha_inicio?fmtDate(parsed.core.fecha_inicio):'— no detectada —'}</div></div>
+      <div class="dg-item"><div class="dg-lbl">Estado</div><div class="dg-val">${escapeHtml(parsed.core.estado||'— no detectado —')}</div></div>
+      <div class="dg-item"><div class="dg-lbl">Entrega mobiliario</div><div class="dg-val">${fmtRango(parsed.core.entrega_inicio,parsed.core.entrega_fin)}</div></div>
+      <div class="dg-item"><div class="dg-lbl">Recolección mobiliario</div><div class="dg-val">${fmtRango(parsed.core.recoleccion_inicio,parsed.core.recoleccion_fin)}</div></div>
       <div class="dg-item"><div class="dg-lbl">Fecha de actualización</div><div class="dg-val">${parsed.core.fecha_actualizacion_externa?fmtDate(parsed.core.fecha_actualizacion_externa):'—'}</div></div>
       <div class="dg-item"><div class="dg-lbl">Venue (PDF)</div><div class="dg-val">${escapeHtml(parsed.core.venueTexto||'—')} ${parsed.core.venueTexto && !venueId ? '<span class="tag-warn">no está en tu catálogo</span>':''}</div></div>
     </div>`;
@@ -774,8 +830,12 @@ function abrirModalOrdenImportado(importado, articulosFinales){
     venue_id: importado.venueId || null,
     fecha_inicio: c.fecha_inicio || '',
     hora_inicio: c.hora_inicio || '',
+    estado: c.estado || 'Pendiente',
     fecha_actualizacion_externa: c.fecha_actualizacion_externa || '',
-    fecha_recogida_mobiliario: c.fecha_inicio || '',
+    entrega_inicio: c.entrega_inicio || '',
+    entrega_fin: c.entrega_fin || '',
+    recoleccion_inicio: c.recoleccion_inicio || '',
+    recoleccion_fin: c.recoleccion_fin || '',
     notas: c.venueTexto && !importado.venueId ? `Venue detectado en el PDF (no está en tu catálogo): ${c.venueTexto}` : ''
   };
   document.getElementById('modalOrdenTitulo').innerHTML = `Nueva <em>orden</em> — importada de PDF`;
