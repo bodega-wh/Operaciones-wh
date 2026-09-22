@@ -552,6 +552,7 @@ document.getElementById('inputPdfOrden').addEventListener('change', async (e)=>{
   showLoading(true);
   try{
     const texto = await extraerTextoPdf(file);
+    console.log('%c[DEBUG] Líneas extraídas del PDF:', 'color:#e07b39;font-weight:bold', texto);
     const parsed = parsearOrdenPdf(texto);
     abrirRevisionImportacion(parsed);
   }catch(err){
