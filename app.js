@@ -552,11 +552,6 @@ document.getElementById('inputPdfOrden').addEventListener('change', async (e)=>{
   showLoading(true);
   try{
     const texto = await extraerTextoPdf(file);
-    console.log('%c[DEBUG] Líneas extraídas del PDF:', 'color:#e07b39;font-weight:bold', texto);
-    try{
-      await navigator.clipboard.writeText(JSON.stringify(texto, null, 2));
-      toast('Se copió el texto leído del PDF al portapapeles (para diagnóstico).');
-    }catch(errClip){ console.warn('No se pudo copiar al portapapeles:', errClip); }
     const parsed = parsearOrdenPdf(texto);
     abrirRevisionImportacion(parsed);
   }catch(err){
@@ -567,7 +562,12 @@ document.getElementById('inputPdfOrden').addEventListener('change', async (e)=>{
   }
 });
 
-/* Lee todas las páginas del PDF y reconstruye el texto línea por línea (agrupando por posición vertical) */
+/* Lee todas las páginas del PDF y reconstruye el texto línea por línea (agrupando por posición vertical).
+   Cuando dos textos de una misma fila están separados por un hueco horizontal grande (más de 15pt — el
+   ancho de columnas de una tabla, muy por encima de un espacio normal), se insertan 3 espacios en vez de 1,
+   para poder luego separar esa fila en sus columnas reales con columnas(linea). Esto es clave porque en
+   estos PDFs, campos como Cliente/Coordinador/Venue (o las fechas de Rental Date + Delivery + Pickup
+   Window) quedan en la MISMA línea de texto al estar a la misma altura. */
 async function extraerTextoPdf(file){
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data: buffer}).promise;
@@ -575,20 +575,36 @@ async function extraerTextoPdf(file){
   for(let n=1; n<=pdf.numPages; n++){
     const page = await pdf.getPage(n);
     const content = await page.getTextContent();
-    const porY = new Map(); // y redondeada -> [{x,str}]
+    const porY = new Map(); // y redondeada -> [{x,w,str}]
     content.items.forEach(it=>{
       const y = Math.round(it.transform[5]);
       const x = it.transform[4];
       if(!porY.has(y)) porY.set(y, []);
-      porY.get(y).push({x, str: it.str});
+      porY.get(y).push({x, w: it.width||0, str: it.str});
     });
     const ys = [...porY.keys()].sort((a,b)=>b-a); // de arriba hacia abajo
     ys.forEach(y=>{
-      const linea = porY.get(y).sort((a,b)=>a.x-b.x).map(t=>t.str).join(' ').replace(/\s+/g,' ').trim();
+      const items = porY.get(y).sort((a,b)=>a.x-b.x);
+      let linea = '';
+      let prevEnd = null;
+      items.forEach(it=>{
+        if(!it.str || !it.str.trim()) return; // se ignoran los marcadores de solo-espacio: el hueco real ya se mide entre los textos con contenido
+        if(prevEnd!==null){
+          const hueco = it.x - prevEnd;
+          linea += hueco > 15 ? '   ' : ' ';
+        }
+        linea += it.str;
+        prevEnd = it.x + it.w;
+      });
+      linea = linea.trim();
       if(linea) lineasTotal.push(linea);
     });
   }
   return lineasTotal;
+}
+/* Separa una línea en sus columnas reales (3 o más espacios seguidos = borde de columna, ver extraerTextoPdf) */
+function columnas(linea){
+  return (linea||'').split(/ {3,}/).map(s=>s.trim()).filter(Boolean);
 }
 
 /* Convierte "05/11/2022" -> "2022-11-05" */
@@ -621,13 +637,9 @@ function estadoPdfATexto(val){
   if(v.startsWith('COMPLET') || v.startsWith('FINISH') || v.startsWith('FINAL')) return 'Finalizada';
   return null;
 }
-/* Las etiquetas propias del PDF (CUSTOMER, COORDINATOR, VENUE, RENTAL DATE) vienen con las letras separadas
-   por espacios ("V E N U E"). Esto evita que una anotación normal como "venue" o "Cliente" (sin espaciar)
-   se confunda con la etiqueta real, ya que compacto() las dejaría iguales. */
-function esEtiquetaEspaciada(linea, palabra){
-  const pat = new RegExp('^'+palabra.split('').join('\\s+')+'$','i');
-  return pat.test((linea||'').trim());
-}
+/* Las etiquetas propias del PDF (CUSTOMER, COORDINATOR, VENUE, RENTAL DATE) suelen venir letra por letra
+   dentro de un mismo texto ("C U S T O M E R"), así que comparar sin espacios (compacto) ya las reconoce
+   sin depender de exactamente cuántos espacios trae cada una. */
 /* Quita todos los espacios y pasa a mayúsculas — para comparar etiquetas sin importar el espaciado que deje el PDF */
 function compacto(s){ return (s||'').replace(/\s+/g,'').toUpperCase(); }
 
@@ -636,57 +648,64 @@ function parsearOrdenPdf(lineas){
   const items = [];
   const cargos = [];
   const warnings = [];
-  const idxRentalDate = lineas.findIndex(l=>esEtiquetaEspaciada(l,'RENTALDATE'));
 
   for(let i=0;i<lineas.length;i++){
     const linea = lineas[i];
     const c = compacto(linea);
+    const cols = columnas(linea);
 
     // "O R D E R 4 2 8 5" (con letras espaciadas) -> compacto queda "ORDER4285"; el número de orden siempre son 4 dígitos
     const mOrdenNum = c.match(/^ORDER(\d{4})$/);
     if(mOrdenNum) core.numero_orden = mOrdenNum[1];
 
-    // "Order Status: Confirmed" (o "Conrmed" por la ligadura fi perdida) -> Estado
+    // "Order Status: Confirmed" (o "Conrmed" por la ligadura fi perdida) -> Estado.
+    // Se busca con una expresión regular sobre la línea completa (no por columnas) porque en esta fila
+    // el espacio entre la etiqueta y su valor es tan ancho como el de una columna real de tabla.
     if(c.startsWith('ORDERSTATUS')){
-      const val = linea.split(':').slice(1).join(':').trim();
-      const estado = estadoPdfATexto(val);
+      const m = linea.match(/status\s*:?\s*([A-Za-zÀ-ÿ]+)/i);
+      const estado = m ? estadoPdfATexto(m[1]) : null;
       if(estado) core.estado = estado;
     }
 
     // "Order Last Modified: 14/09/2026 12:25 PM" — el extractor de PDF a veces pierde la "f" de "fi"
     // y queda "Order Last Modied", por eso comparamos solo el prefijo "ORDERLASTMODI"
     if(c.startsWith('ORDERLASTMODI')){
-      let fecha = extraerFechaDeLinea(linea);
-      if(!fecha){
-        for(let j=i+1;j<Math.min(i+3,lineas.length);j++){ fecha = extraerFechaDeLinea(lineas[j]); if(fecha) break; }
-      }
+      const fecha = extraerFechaDeLinea(linea);
       if(fecha) core.fecha_actualizacion_externa = fecha;
     }
-    if(esEtiquetaEspaciada(linea,'CUSTOMER')){
-      const val = (lineas[i+1]||'').trim();
-      if(val && compacto(val)!=='COORDINATOR') core.cliente = val;
-    }
-    if(esEtiquetaEspaciada(linea,'COORDINATOR')){
-      const val = (lineas[i+1]||'').trim();
-      if(val && compacto(val)!=='VENUE') core.coordinador = val;
-    }
-    if(esEtiquetaEspaciada(linea,'VENUE')){
-      const val = (lineas[i+1]||'').trim();
-      // si la línea siguiente ya es el encabezado de la tabla de items, el venue venía vacío
-      if(val && !compacto(val).startsWith('ITEMDIMENSIONS') && !compacto(val).startsWith('RENTALREP')) core.venueTexto = val;
-    }
+
     if(c.startsWith('RENTALREP')){
       const val = linea.split(':').slice(1).join(':').trim();
       if(val) core.rep = val;
     }
-    if(esEtiquetaEspaciada(linea,'RENTALDATE')){
-      // las siguientes ~3 líneas traen: día de la semana, fecha, hora
-      for(let j=i+1;j<Math.min(i+5,lineas.length);j++){
-        const fecha = fechaPdfAIso(lineas[j]);
-        if(fecha) core.fecha_inicio = fecha;
-        const hora = horaPdfA24h(lineas[j]);
-        if(hora) core.hora_inicio = hora;
+
+    // CUSTOMER / COORDINATOR / VENUE suelen quedar en una sola línea (misma fila de la tabla, 2 o 3 columnas).
+    // Se ubica qué columna es cada etiqueta y se toma esa misma columna en la línea de valores (la siguiente).
+    if(cols.length>=2){
+      const idxCliente = cols.findIndex(x=>compacto(x)==='CUSTOMER');
+      const idxCoord = cols.findIndex(x=>compacto(x)==='COORDINATOR');
+      const idxVenue = cols.findIndex(x=>compacto(x)==='VENUE');
+      if(idxCliente>=0 || idxCoord>=0 || idxVenue>=0){
+        const valores = columnas(lineas[i+1]||'');
+        if(idxCliente>=0 && valores[idxCliente]) core.cliente = valores[idxCliente];
+        if(idxCoord>=0 && valores[idxCoord]) core.coordinador = valores[idxCoord];
+        if(idxVenue>=0 && valores[idxVenue]) core.venueTexto = valores[idxVenue];
       }
+    }
+
+    // Rental Date + Delivery Window + Pickup Window: cuando las 3 traen datos, la fila de fechas queda
+    // como 5 columnas (Rental Date, Delivery inicio, Delivery fin, Pickup inicio, Pickup fin) y la fila
+    // de horas igual. Es una combinación muy específica, así que sirve para ubicarlas sin depender de la
+    // etiqueta (que puede venir pegada a las de al lado, ej. "RENTAL DATE DELIVERY WINDOW PICKUP WINDOW").
+    if(cols.length===5 && cols.every(x=>fechaPdfAIso(x))){
+      core.fecha_inicio = fechaPdfAIso(cols[0]);
+      core.entrega_inicio = fechaPdfAIso(cols[1]);
+      core.entrega_fin = fechaPdfAIso(cols[2]);
+      core.recoleccion_inicio = fechaPdfAIso(cols[3]);
+      core.recoleccion_fin = fechaPdfAIso(cols[4]);
+    }
+    if(cols.length===5 && cols.every(x=>horaPdfA24h(x))){
+      core.hora_inicio = horaPdfA24h(cols[0]);
     }
 
     // filas de artículos: Nombre [Dimensiones|-] Cantidad $Precio $Total
@@ -707,24 +726,24 @@ function parsearOrdenPdf(lineas){
     }
   }
 
-  // "Delivery Window" y "Pickup Window": en el PDF cada una trae 2 fechas con hora (inicio y fin).
-  // El extractor de texto las deja como líneas sueltas "fecha" seguida de "hora" en el orden en que aparecen
-  // en el documento (después de "Rental Date" y de la tabla de artículos): primero Delivery Window
-  // (inicio, fin) y luego Pickup Window (inicio, fin). Se ignora el par que ya se usó para "Rental Date".
-  const paresFechaHora = [];
-  for(let i=0;i<lineas.length;i++){
-    if(idxRentalDate>=0 && i>idxRentalDate && i<=idxRentalDate+4) continue; // ya usado por Fecha de evento
-    const fecha = fechaPdfAIso(lineas[i]);
-    if(!fecha) continue;
-    const hora = horaPdfA24h(lineas[i+1]||'');
-    if(!hora) continue;
-    paresFechaHora.push(fecha);
-    i++; // ya se consumió la línea de la hora
+  // Si Delivery/Pickup Window venían vacíos, la fila de fechas no tuvo 5 columnas y "Fecha de evento" no
+  // se detectó arriba. Se busca entonces solo el rótulo "RENTAL DATE" y la fecha/hora en su misma columna.
+  if(!core.fecha_inicio){
+    for(let i=0;i<lineas.length;i++){
+      const cols = columnas(lineas[i]);
+      const idxRD = cols.findIndex(x=>compacto(x)==='RENTALDATE');
+      if(idxRD<0) continue;
+      for(let j=i+1;j<Math.min(i+5,lineas.length);j++){
+        const colsj = columnas(lineas[j]);
+        if(!colsj[idxRD]) continue;
+        const fecha = fechaPdfAIso(colsj[idxRD]);
+        if(fecha) core.fecha_inicio = fecha;
+        const hora = horaPdfA24h(colsj[idxRD]);
+        if(hora) core.hora_inicio = hora;
+      }
+      break;
+    }
   }
-  if(paresFechaHora[0]) core.entrega_inicio = paresFechaHora[0];
-  if(paresFechaHora[1]) core.entrega_fin = paresFechaHora[1];
-  if(paresFechaHora[2]) core.recoleccion_inicio = paresFechaHora[2];
-  if(paresFechaHora[3]) core.recoleccion_fin = paresFechaHora[3];
 
   if(!core.cliente) warnings.push('No se detectó el cliente — revísalo manualmente.');
   if(!core.numero_orden) warnings.push('No se detectó el número de orden — revísalo manualmente.');
@@ -763,10 +782,10 @@ function abrirRevisionImportacion(parsed){
       <div class="dg-item"><div class="dg-lbl">Entrega mobiliario</div><div class="dg-val">${fmtRango(parsed.core.entrega_inicio,parsed.core.entrega_fin)}</div></div>
       <div class="dg-item"><div class="dg-lbl">Recolección mobiliario</div><div class="dg-val">${fmtRango(parsed.core.recoleccion_inicio,parsed.core.recoleccion_fin)}</div></div>
       <div class="dg-item"><div class="dg-lbl">Fecha de actualización</div><div class="dg-val">${parsed.core.fecha_actualizacion_externa?fmtDate(parsed.core.fecha_actualizacion_externa):'—'}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Venue (PDF)</div><div class="dg-val">${escapeHtml(parsed.core.venueTexto||'—')} ${parsed.core.venueTexto && !venueId ? '<span class="tag-warn">no está en tu catálogo</span>':''}</div></div>
+      <div class="dg-item"><div class="dg-lbl">Venue</div><div class="dg-val">${escapeHtml(parsed.core.venueTexto||'—')} ${parsed.core.venueTexto && !venueId ? '<span class="tag-warn">no está en tu catálogo</span>':''}</div></div>
     </div>`;
 
-  const itemsHtml = resueltos.length ? `<table><thead><tr><th>Artículo (del PDF)</th><th style="width:110px">Dimensiones</th><th class="r" style="width:70px">Cant.</th><th style="width:260px">Vincular a</th></tr></thead><tbody>
+  const itemsHtml = resueltos.length ? `<table><thead><tr><th>Artículo detectado</th><th style="width:110px">Dimensiones</th><th class="r" style="width:70px">Cant.</th><th style="width:260px">Vincular a</th></tr></thead><tbody>
     ${resueltos.map((it,i)=>`<tr>
       <td>${escapeHtml(it.nombre)}</td>
       <td>${escapeHtml(it.dimensiones||'—')}</td>
