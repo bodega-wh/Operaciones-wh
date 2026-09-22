@@ -553,6 +553,10 @@ document.getElementById('inputPdfOrden').addEventListener('change', async (e)=>{
   try{
     const texto = await extraerTextoPdf(file);
     console.log('%c[DEBUG] Líneas extraídas del PDF:', 'color:#e07b39;font-weight:bold', texto);
+    try{
+      await navigator.clipboard.writeText(JSON.stringify(texto, null, 2));
+      toast('Se copió el texto leído del PDF al portapapeles (para diagnóstico).');
+    }catch(errClip){ console.warn('No se pudo copiar al portapapeles:', errClip); }
     const parsed = parsearOrdenPdf(texto);
     abrirRevisionImportacion(parsed);
   }catch(err){
