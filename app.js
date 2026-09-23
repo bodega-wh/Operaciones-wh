@@ -771,18 +771,33 @@ function abrirRevisionImportacion(parsed){
 
   const warningsHtml = parsed.warnings.length ? `<div class="alerta-box"><div class="av-ico">⚠</div><div><div class="av-title">Revisa antes de continuar</div><div class="av-desc">${parsed.warnings.map(escapeHtml).join('<br>')}</div></div></div>` : '';
 
+  const estadoOpts = ['Pendiente','Confirmada','Cancelada','Finalizada'];
   const resumenHtml = `
-    <div class="detalle-grid">
-      <div class="dg-item"><div class="dg-lbl">Orden (#)</div><div class="dg-val">${escapeHtml(parsed.core.numero_orden||'— no detectado —')}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Cliente</div><div class="dg-val">${escapeHtml(parsed.core.cliente||'— no detectado —')}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Coordinador</div><div class="dg-val">${escapeHtml(parsed.core.coordinador||'—')}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Rep. comercial</div><div class="dg-val">${escapeHtml(parsed.core.rep||'—')}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Fecha del evento</div><div class="dg-val">${parsed.core.fecha_inicio?fmtDate(parsed.core.fecha_inicio):'— no detectada —'}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Estado</div><div class="dg-val">${escapeHtml(parsed.core.estado||'— no detectado —')}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Entrega mobiliario</div><div class="dg-val">${fmtRango(parsed.core.entrega_inicio,parsed.core.entrega_fin)}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Recolección mobiliario</div><div class="dg-val">${fmtRango(parsed.core.recoleccion_inicio,parsed.core.recoleccion_fin)}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Fecha de actualización</div><div class="dg-val">${parsed.core.fecha_actualizacion_externa?fmtDate(parsed.core.fecha_actualizacion_externa):'—'}</div></div>
-      <div class="dg-item"><div class="dg-lbl">Venue</div><div class="dg-val">${escapeHtml(parsed.core.venueTexto||'—')} ${parsed.core.venueTexto && !venueId ? '<span class="tag-warn">no está en tu catálogo</span>':''}</div></div>
+    <div class="form-row">
+      <div class="form-group"><label>Orden (#)</label><input id="rev_numero_orden" value="${escapeHtml(parsed.core.numero_orden||'')}"></div>
+      <div class="form-group"><label>Cliente</label><input id="rev_cliente" value="${escapeHtml(parsed.core.cliente||'')}"></div>
+      <div class="form-group"><label>Coordinador</label><input id="rev_coordinador" value="${escapeHtml(parsed.core.coordinador||'')}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Rep. comercial</label><input id="rev_rep" value="${escapeHtml(parsed.core.rep||'')}"></div>
+      <div class="form-group"><label>Fecha del evento</label><input type="date" id="rev_fecha_inicio" value="${parsed.core.fecha_inicio||''}"></div>
+      <div class="form-group"><label>Estado</label><select id="rev_estado">${estadoOpts.map(o=>`<option ${parsed.core.estado===o?'selected':''}>${o}</option>`).join('')}</select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Entrega mobiliario — inicio</label><input type="date" id="rev_entrega_inicio" value="${parsed.core.entrega_inicio||''}"></div>
+      <div class="form-group"><label>Entrega mobiliario — fin</label><input type="date" id="rev_entrega_fin" value="${parsed.core.entrega_fin||''}"></div>
+      <div class="form-group"><label>Fecha de actualización</label><input type="date" id="rev_fecha_actualizacion" value="${parsed.core.fecha_actualizacion_externa||''}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Recolección mobiliario — inicio</label><input type="date" id="rev_recoleccion_inicio" value="${parsed.core.recoleccion_inicio||''}"></div>
+      <div class="form-group"><label>Recolección mobiliario — fin</label><input type="date" id="rev_recoleccion_fin" value="${parsed.core.recoleccion_fin||''}"></div>
+      <div class="form-group"><label>Venue</label>
+        <select id="rev_venue_id">
+          <option value="">— sin vincular —</option>
+          ${DB.venues.map(v=>`<option value="${v.id}" ${venueId===v.id?'selected':''}>${escapeHtml(v.nombre)}</option>`).join('')}
+        </select>
+        ${parsed.core.venueTexto && !venueId ? `<div class="sub-empty">Detectado en el PDF: "${escapeHtml(parsed.core.venueTexto)}" — no coincide con tu catálogo, elige uno o vincúlalo después.</div>` : ''}
+      </div>
     </div>`;
 
   const itemsHtml = resueltos.length ? `<table><thead><tr><th>Artículo detectado</th><th style="width:110px">Dimensiones</th><th class="r" style="width:70px">Cant.</th><th style="width:260px">Vincular a</th></tr></thead><tbody>
@@ -804,7 +819,7 @@ function abrirRevisionImportacion(parsed){
 
   document.getElementById('importarPdfBody').innerHTML = `
     ${warningsHtml}
-    <div class="form-section-label">Datos generales detectados</div>
+    <div class="form-section-label">Datos generales — revisa y corrige lo que haga falta</div>
     ${resumenHtml}
     <div class="form-section-label">Artículos detectados (${resueltos.length})</div>
     ${itemsHtml}
@@ -816,6 +831,23 @@ function abrirRevisionImportacion(parsed){
 document.getElementById('btnContinuarImportacion').addEventListener('click', async ()=>{
   showLoading(true);
   try{
+    // aplica cualquier corrección hecha a mano en la pantalla de revisión antes de armar la orden
+    importacionState.core = {
+      ...importacionState.core,
+      numero_orden: document.getElementById('rev_numero_orden').value.trim() || null,
+      cliente: document.getElementById('rev_cliente').value.trim() || null,
+      coordinador: document.getElementById('rev_coordinador').value.trim() || null,
+      rep: document.getElementById('rev_rep').value.trim() || null,
+      fecha_inicio: document.getElementById('rev_fecha_inicio').value || null,
+      estado: document.getElementById('rev_estado').value,
+      entrega_inicio: document.getElementById('rev_entrega_inicio').value || null,
+      entrega_fin: document.getElementById('rev_entrega_fin').value || null,
+      recoleccion_inicio: document.getElementById('rev_recoleccion_inicio').value || null,
+      recoleccion_fin: document.getElementById('rev_recoleccion_fin').value || null,
+      fecha_actualizacion_externa: document.getElementById('rev_fecha_actualizacion').value || null
+    };
+    importacionState.venueId = document.getElementById('rev_venue_id').value || null;
+
     const articulosFinales = [];
     for(let i=0;i<importacionState.items.length;i++){
       const it = importacionState.items[i];
