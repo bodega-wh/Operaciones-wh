@@ -11,6 +11,8 @@ const DB = { ordenes: [], personal: [], unidades: [], venues: [], articulos: [],
 const state = {
   tab: 'ordenes',
   ordenFiltro: 'todos', ordenBusqueda: '',
+  ordenColFiltros: { orden:'', fecha:'', cliente:'', venue:'', pax:'', personal:'', unidades:'', tipo:'', estado:'' },
+  ordenSort: { col:'fecha', dir:'asc' },
   semanaOffset: 0,
   calYear: null, calMonth: null, calSelDay: null,
   flotaCalOffset: 0, historialBusqueda: '',
@@ -172,16 +174,105 @@ function renderCurrentTab(){
 }
 
 /* ══════════════════════════ ÓRDENES ══════════════════════════ */
+/* Columnas de la tabla de Órdenes: orden en que aparecen, cómo se filtran y cómo se ordenan.
+   type 'text' y 'number' filtran por coincidencia parcial; 'select' filtra por igualdad exacta (con
+   opciones fijas); 'fecha' filtra por coincidencia parcial contra el texto ya formateado (ej. "sep",
+   "2026"). get(o) siempre regresa el valor "crudo" usado tanto para ordenar como, en 'number', para filtrar. */
+const ORDEN_COLUMNS = [
+  { key:'orden', label:'Orden', type:'text', width:'110px', get:o=>o.nombre_evento||'' },
+  { key:'fecha', label:'Fecha de evento', type:'fecha', width:'150px', get:o=>o.fecha_inicio||'' },
+  { key:'cliente', label:'Cliente', type:'text', get:o=>o.cliente||'' },
+  { key:'venue', label:'Venue', type:'text', get:o=>o.venue?.nombre||'' },
+  { key:'pax', label:'Pax', type:'number', width:'70px', numeric:true, get:o=>o.pax??0 },
+  { key:'personal', label:'Personal', type:'number', width:'110px', numeric:true, get:o=>o.orden_personal?.length||0 },
+  { key:'unidades', label:'Unidades', type:'number', width:'110px', numeric:true, get:o=>(o.orden_unidades||[]).length },
+  { key:'tipo', label:'Tipo', type:'select', width:'110px', options:['Delivery','Will-Call','Mockup','Pick Up'], get:o=>o.tipo||'Delivery' },
+  { key:'estado', label:'Estado', type:'select', width:'110px', options:['Pendiente','Confirmada','Cancelada','Finalizada'], get:o=>o.estado }
+];
+
 function ordenesFiltradas(){
-  return DB.ordenes.filter(o=>{
+  let list = DB.ordenes.filter(o=>{
     if(state.ordenFiltro!=='todos' && o.estado!==state.ordenFiltro) return false;
     if(state.ordenBusqueda){
       const q = state.ordenBusqueda.toLowerCase();
       const hay = [o.cliente,o.nombre_evento,o.venue?.nombre].filter(Boolean).join(' ').toLowerCase();
       if(!hay.includes(q)) return false;
     }
+    for(const col of ORDEN_COLUMNS){
+      const filtro = (state.ordenColFiltros[col.key]||'').trim();
+      if(!filtro) continue;
+      if(col.type==='select'){
+        if(String(col.get(o))!==filtro) return false;
+      } else if(col.type==='fecha'){
+        if(!fmtRango(o.fecha_inicio,o.fecha_fin).toLowerCase().includes(filtro.toLowerCase())) return false;
+      } else {
+        if(!String(col.get(o)).toLowerCase().includes(filtro.toLowerCase())) return false;
+      }
+    }
     return true;
-  }).sort((a,b)=> a.fecha_inicio.localeCompare(b.fecha_inicio));
+  });
+  const def = ORDEN_COLUMNS.find(c=>c.key===state.ordenSort.col);
+  if(def){
+    const dir = state.ordenSort.dir==='desc' ? -1 : 1;
+    list = list.slice().sort((a,b)=>{
+      const va = def.get(a), vb = def.get(b);
+      const cmp = def.numeric ? (Number(va)||0)-(Number(vb)||0) : String(va).localeCompare(String(vb),'es',{sensitivity:'base'});
+      return cmp*dir;
+    });
+  }
+  return list;
+}
+
+let ordenesHeadBuilt = false;
+function renderOrdenesHead(){
+  const head = document.getElementById('ordenesHead');
+  head.innerHTML = `
+    <tr>${ORDEN_COLUMNS.map(c=>{
+      const activo = state.ordenSort.col===c.key;
+      const flecha = activo ? (state.ordenSort.dir==='asc'?' ▲':' ▼') : '';
+      return `<th data-sort="${c.key}" style="cursor:pointer;user-select:none;white-space:nowrap;${c.width?`width:${c.width}`:''}" class="${c.numeric?'r':''}" title="Ordenar">${c.label}<span style="color:var(--dorado)">${flecha}</span></th>`;
+    }).join('')}</tr>
+    <tr>${ORDEN_COLUMNS.map(c=>{
+      const val = state.ordenColFiltros[c.key]||'';
+      const inputStyle = 'width:100%;padding:4px 6px;font-size:11px;border:1px solid var(--linea);border-radius:4px;font-family:inherit';
+      if(c.type==='select'){
+        return `<th style="position:static;padding:6px 8px"><select data-filtro="${c.key}" style="${inputStyle};background:#fff">
+          <option value="">Todos</option>
+          ${c.options.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}
+        </select></th>`;
+      }
+      return `<th style="position:static;padding:6px 8px"><input type="text" data-filtro="${c.key}" value="${escapeHtml(val)}" placeholder="Filtrar…" style="${inputStyle}"></th>`;
+    }).join('')}</tr>
+  `;
+  head.querySelectorAll('[data-sort]').forEach(th=>th.addEventListener('click', ()=>{
+    const col = th.dataset.sort;
+    if(state.ordenSort.col===col) state.ordenSort.dir = state.ordenSort.dir==='asc'?'desc':'asc';
+    else state.ordenSort = { col, dir:'asc' };
+    renderOrdenesHead();
+    renderOrdenesBody();
+  }));
+  head.querySelectorAll('[data-filtro]').forEach(inp=>{
+    const ev = inp.tagName==='SELECT' ? 'change' : 'input';
+    inp.addEventListener(ev, ()=>{ state.ordenColFiltros[inp.dataset.filtro] = inp.value; renderOrdenesBody(); });
+  });
+}
+
+function renderOrdenesBody(){
+  document.getElementById('tbOrdenes').innerHTML = ordenesFiltradas().map(o=>{
+    const personalTxt = `${o.orden_personal?.length||0}/${o.personal_requerido||0}`;
+    const unidadesTxt = (o.orden_unidades||[]).map(u=>u.unidad?.tipo).filter(Boolean);
+    return `<tr class="fila-data" onclick="abrirDetalleOrden('${o.id}')">
+      <td><b>${escapeHtml(o.nombre_evento||'—')}</b></td>
+      <td>${fmtRango(o.fecha_inicio,o.fecha_fin)}</td>
+      <td>${escapeHtml(o.cliente)}</td>
+      <td>${escapeHtml(o.venue?.nombre||'—')}</td>
+      <td class="r">${o.pax??0}</td>
+      <td>${personalTxt}</td>
+      <td>${unidadesTxt.length?unidadesTxt.map(u=>`<span class="unidad-tag">${escapeHtml(u)}</span>`).join(''):'—'}</td>
+      <td>${escapeHtml(o.tipo||'Delivery')}</td>
+      <td>${badge(o.estado)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="${ORDEN_COLUMNS.length}"><div class="empty-state"><div class="es-ico">📭</div><p>No hay órdenes con ese filtro.</p></div></td></tr>`;
 }
 
 function renderOrdenesTab(){
@@ -195,20 +286,8 @@ function renderOrdenesTab(){
   document.getElementById('kPax').textContent = enVentana.reduce((s,o)=>s+(o.pax||0),0);
   document.getElementById('kAlertasOr').textContent = computeAlerts().length;
 
-  document.getElementById('tbOrdenes').innerHTML = ordenesFiltradas().map(o=>{
-    const personalTxt = `${o.orden_personal?.length||0}/${o.personal_requerido||0}`;
-    const unidadesTxt = (o.orden_unidades||[]).map(u=>u.unidad?.tipo).filter(Boolean);
-    return `<tr class="fila-data" onclick="abrirDetalleOrden('${o.id}')">
-      <td>${fmtRango(o.fecha_inicio,o.fecha_fin)}</td>
-      <td><b>${escapeHtml(o.cliente)}</b><br><span style="color:var(--suave);font-size:10px">${escapeHtml(o.nombre_evento)}</span></td>
-      <td>${escapeHtml(o.venue?.nombre||'—')}</td>
-      <td class="r">${o.pax??0}</td>
-      <td>${personalTxt}</td>
-      <td>${unidadesTxt.length?unidadesTxt.map(u=>`<span class="unidad-tag">${escapeHtml(u)}</span>`).join(''):'—'}</td>
-      <td>${escapeHtml(o.tipo||'Delivery')}</td>
-      <td>${badge(o.estado)}</td>
-    </tr>`;
-  }).join('') || `<tr><td colspan="8"><div class="empty-state"><div class="es-ico">📭</div><p>No hay órdenes con ese filtro.</p></div></td></tr>`;
+  if(!ordenesHeadBuilt){ renderOrdenesHead(); ordenesHeadBuilt = true; }
+  renderOrdenesBody();
 }
 document.getElementById('buscarOrden').addEventListener('input', e=>{ state.ordenBusqueda=e.target.value; renderOrdenesTab(); });
 document.getElementById('filtrosOrden').addEventListener('click', e=>{
@@ -259,7 +338,7 @@ function ordenFormHTML(o){
     <div class="form-group"><label>Fecha de actualización</label><input type="date" id="of_fecha_actualizacion" value="${o.fecha_actualizacion_externa||''}"></div>
   </div>
   <div class="form-row">
-    <div class="form-group"><label>Tipo</label><select id="of_tipo">${['Delivery','Pull-Ticket','Otro'].map(t=>`<option ${o.tipo===t?'selected':''}>${t}</option>`).join('')}</select></div>
+    <div class="form-group"><label>Tipo</label><select id="of_tipo">${['Delivery','Will-Call','Mockup','Pick Up'].map(t=>`<option ${o.tipo===t?'selected':''}>${t}</option>`).join('')}</select></div>
     <div class="form-group"><label>Estado</label><select id="of_estado">${['Pendiente','Confirmada','Cancelada','Finalizada'].map(t=>`<option ${o.estado===t?'selected':''}>${t}</option>`).join('')}</select></div>
     <div class="form-group"><label>Venue</label><select id="of_venue_id">${selOptions(DB.venues,'id',v=>v.nombre,o.venue_id||o.venue?.id)}</select></div>
   </div>
